@@ -1,3 +1,9 @@
+gitea (1.14.7+dfsg-1) UNRELEASED; urgency=medium
+
+  * Update to version 1.14.7
+
+ -- Lubomir Host <lubomir.host@gmail.com>  Mon, 13 Mar 2023 13:29:05 +0200
+
 gitea (1.3.2+dfsg-4) UNRELEASED; urgency=medium
 
   * Point Vcs-* urls to salsa.debian.org.
