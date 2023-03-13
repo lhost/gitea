@@ -5,22 +5,23 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
-	"net/http/fcgi"
-	_ "net/http/pprof" // Used for debugging if enabled and a web server is running
 	"os"
 	"strings"
 
+	_ "net/http/pprof" // Used for debugging if enabled and a web server is running
+
+	"code.gitea.io/gitea/modules/graceful"
 	"code.gitea.io/gitea/modules/log"
-	"code.gitea.io/gitea/modules/markup/external"
+	"code.gitea.io/gitea/modules/process"
 	"code.gitea.io/gitea/modules/setting"
 	"code.gitea.io/gitea/routers"
-	"code.gitea.io/gitea/routers/routes"
+	"code.gitea.io/gitea/routers/install"
 
-	"github.com/Unknwon/com"
-	context2 "github.com/gorilla/context"
+	"github.com/felixge/fgprof"
 	"github.com/urfave/cli"
 	ini "gopkg.in/ini.v1"
 )
@@ -39,122 +40,234 @@ and it takes care of all the other things for you`,
 			Usage: "Temporary port number to prevent conflict",
 		},
 		cli.StringFlag{
-			Name:  "config, c",
-			Value: "custom/conf/app.ini",
-			Usage: "Custom configuration file path",
+			Name:  "install-port",
+			Value: "3000",
+			Usage: "Temporary port number to run the install page on to prevent conflict",
 		},
 		cli.StringFlag{
 			Name:  "pid, P",
-			Value: "/var/run/gitea.pid",
+			Value: setting.PIDFile,
 			Usage: "Custom pid file path",
+		},
+		cli.BoolFlag{
+			Name:  "quiet, q",
+			Usage: "Only display Fatal logging errors until logging is set-up",
+		},
+		cli.BoolFlag{
+			Name:  "verbose",
+			Usage: "Set initial logging to TRACE level until logging is properly set-up",
 		},
 	},
 }
 
+func runHTTPRedirector() {
+	_, _, finished := process.GetManager().AddTypedContext(graceful.GetManager().HammerContext(), "Web: HTTP Redirector", process.SystemProcessType, true)
+	defer finished()
+
+	source := fmt.Sprintf("%s:%s", setting.HTTPAddr, setting.PortToRedirect)
+	dest := strings.TrimSuffix(setting.AppURL, "/")
+	log.Info("Redirecting: %s to %s", source, dest)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		target := dest + r.URL.Path
+		if len(r.URL.RawQuery) > 0 {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusTemporaryRedirect)
+	})
+
+	err := runHTTP("tcp", source, "HTTP Redirector", handler, setting.RedirectorUseProxyProtocol)
+	if err != nil {
+		log.Fatal("Failed to start port redirection: %v", err)
+	}
+}
+
 func runWeb(ctx *cli.Context) error {
-	if ctx.IsSet("config") {
-		setting.CustomConf = ctx.String("config")
+	if ctx.Bool("verbose") {
+		_ = log.DelLogger("console")
+		log.NewLogger(0, "console", "console", fmt.Sprintf(`{"level": "trace", "colorize": %t, "stacktraceLevel": "none"}`, log.CanColorStdout))
+	} else if ctx.Bool("quiet") {
+		_ = log.DelLogger("console")
+		log.NewLogger(0, "console", "console", fmt.Sprintf(`{"level": "fatal", "colorize": %t, "stacktraceLevel": "none"}`, log.CanColorStdout))
+	}
+	defer func() {
+		if panicked := recover(); panicked != nil {
+			log.Fatal("PANIC: %v\n%s", panicked, log.Stack(2))
+		}
+	}()
+
+	managerCtx, cancel := context.WithCancel(context.Background())
+	graceful.InitManager(managerCtx)
+	defer cancel()
+
+	if os.Getppid() > 1 && len(os.Getenv("LISTEN_FDS")) > 0 {
+		log.Info("Restarting Gitea on PID: %d from parent PID: %d", os.Getpid(), os.Getppid())
+	} else {
+		log.Info("Starting Gitea on PID: %d", os.Getpid())
 	}
 
+	// Set pid file setting
 	if ctx.IsSet("pid") {
-		setting.CustomPID = ctx.String("pid")
+		setting.PIDFile = ctx.String("pid")
+		setting.WritePIDFile = true
 	}
 
-	routers.GlobalInit()
-
-	external.RegisterParsers()
-
-	m := routes.NewMacaron()
-	routes.RegisterRoutes(m)
-
-	// Flag for port number in case first time run conflict.
-	if ctx.IsSet("port") {
-		setting.AppURL = strings.Replace(setting.AppURL, setting.HTTPPort, ctx.String("port"), 1)
-		setting.HTTPPort = ctx.String("port")
-
-		switch setting.Protocol {
-		case setting.UnixSocket:
-		case setting.FCGI:
+	// Perform pre-initialization
+	needsInstall := install.PreloadSettings(graceful.GetManager().HammerContext())
+	if needsInstall {
+		// Flag for port number in case first time run conflict
+		if ctx.IsSet("port") {
+			if err := setPort(ctx.String("port")); err != nil {
+				return err
+			}
+		}
+		if ctx.IsSet("install-port") {
+			if err := setPort(ctx.String("install-port")); err != nil {
+				return err
+			}
+		}
+		installCtx, cancel := context.WithCancel(graceful.GetManager().HammerContext())
+		c := install.Routes(installCtx)
+		err := listen(c, false)
+		cancel()
+		if err != nil {
+			log.Critical("Unable to open listener for installer. Is Gitea already running?")
+			graceful.GetManager().DoGracefulShutdown()
+		}
+		select {
+		case <-graceful.GetManager().IsShutdown():
+			<-graceful.GetManager().Done()
+			log.Info("PID: %d Gitea Web Finished", os.Getpid())
+			log.Close()
+			return err
 		default:
-			// Save LOCAL_ROOT_URL if port changed
-			cfg := ini.Empty()
-			if com.IsFile(setting.CustomConf) {
-				// Keeps custom settings if there is already something.
-				if err := cfg.Append(setting.CustomConf); err != nil {
-					return fmt.Errorf("Failed to load custom conf '%s': %v", setting.CustomConf, err)
-				}
-			}
+		}
+	} else {
+		NoInstallListener()
+	}
 
-			defaultLocalURL := string(setting.Protocol) + "://"
-			if setting.HTTPAddr == "0.0.0.0" {
-				defaultLocalURL += "localhost"
-			} else {
-				defaultLocalURL += setting.HTTPAddr
-			}
-			defaultLocalURL += ":" + setting.HTTPPort + "/"
+	if setting.EnablePprof {
+		go func() {
+			http.DefaultServeMux.Handle("/debug/fgprof", fgprof.Handler())
+			_, _, finished := process.GetManager().AddTypedContext(context.Background(), "Web: PProf Server", process.SystemProcessType, true)
+			// The pprof server is for debug purpose only, it shouldn't be exposed on public network. At the moment it's not worth to introduce a configurable option for it.
+			log.Info("Starting pprof server on localhost:6060")
+			log.Info("Stopped pprof server: %v", http.ListenAndServe("localhost:6060", nil))
+			finished()
+		}()
+	}
 
-			cfg.Section("server").Key("LOCAL_ROOT_URL").SetValue(defaultLocalURL)
+	log.Info("Global init")
+	// Perform global initialization
+	setting.LoadFromExisting()
+	routers.GlobalInitInstalled(graceful.GetManager().HammerContext())
 
-			if err := cfg.SaveTo(setting.CustomConf); err != nil {
-				return fmt.Errorf("Error saving generated JWT Secret to custom config: %v", err)
-			}
+	// We check that AppDataPath exists here (it should have been created during installation)
+	// We can't check it in `GlobalInitInstalled`, because some integration tests
+	// use cmd -> GlobalInitInstalled, but the AppDataPath doesn't exist during those tests.
+	if _, err := os.Stat(setting.AppDataPath); err != nil {
+		log.Fatal("Can not find APP_DATA_PATH '%s'", setting.AppDataPath)
+	}
+
+	// Override the provided port number within the configuration
+	if ctx.IsSet("port") {
+		if err := setPort(ctx.String("port")); err != nil {
+			return err
 		}
 	}
 
-	var listenAddr string
-	if setting.Protocol == setting.UnixSocket {
-		listenAddr = fmt.Sprintf("%s", setting.HTTPAddr)
-	} else {
-		listenAddr = fmt.Sprintf("%s:%s", setting.HTTPAddr, setting.HTTPPort)
+	// Set up Chi routes
+	c := routers.NormalRoutes(graceful.GetManager().HammerContext())
+	err := listen(c, true)
+	<-graceful.GetManager().Done()
+	log.Info("PID: %d Gitea Web Finished", os.Getpid())
+	log.Close()
+	return err
+}
+
+func setPort(port string) error {
+	setting.AppURL = strings.Replace(setting.AppURL, setting.HTTPPort, port, 1)
+	setting.HTTPPort = port
+
+	switch setting.Protocol {
+	case setting.HTTPUnix:
+	case setting.FCGI:
+	case setting.FCGIUnix:
+	default:
+		defaultLocalURL := string(setting.Protocol) + "://"
+		if setting.HTTPAddr == "0.0.0.0" {
+			defaultLocalURL += "localhost"
+		} else {
+			defaultLocalURL += setting.HTTPAddr
+		}
+		defaultLocalURL += ":" + setting.HTTPPort + "/"
+
+		// Save LOCAL_ROOT_URL if port changed
+		setting.CreateOrAppendToCustomConf("server.LOCAL_ROOT_URL", func(cfg *ini.File) {
+			cfg.Section("server").Key("LOCAL_ROOT_URL").SetValue(defaultLocalURL)
+		})
 	}
+	return nil
+}
+
+func listen(m http.Handler, handleRedirector bool) error {
+	listenAddr := setting.HTTPAddr
+	if setting.Protocol != setting.HTTPUnix && setting.Protocol != setting.FCGIUnix {
+		listenAddr = net.JoinHostPort(listenAddr, setting.HTTPPort)
+	}
+	_, _, finished := process.GetManager().AddTypedContext(graceful.GetManager().HammerContext(), "Web: Gitea Server", process.SystemProcessType, true)
+	defer finished()
 	log.Info("Listen: %v://%s%s", setting.Protocol, listenAddr, setting.AppSubURL)
+	// This can be useful for users, many users do wrong to their config and get strange behaviors behind a reverse-proxy.
+	// A user may fix the configuration mistake when he sees this log.
+	// And this is also very helpful to maintainers to provide help to users to resolve their configuration problems.
+	log.Info("AppURL(ROOT_URL): %s", setting.AppURL)
 
 	if setting.LFS.StartServer {
 		log.Info("LFS server enabled")
 	}
 
-	if setting.EnablePprof {
-		go func() {
-			log.Info("%v", http.ListenAndServe("localhost:6060", nil))
-		}()
-	}
-
 	var err error
 	switch setting.Protocol {
 	case setting.HTTP:
-		err = runHTTP(listenAddr, context2.ClearHandler(m))
+		if handleRedirector {
+			NoHTTPRedirector()
+		}
+		err = runHTTP("tcp", listenAddr, "Web", m, setting.UseProxyProtocol)
 	case setting.HTTPS:
-		err = runHTTPS(listenAddr, setting.CertFile, setting.KeyFile, context2.ClearHandler(m))
+		if setting.EnableAcme {
+			err = runACME(listenAddr, m)
+			break
+		}
+		if handleRedirector {
+			if setting.RedirectOtherPort {
+				go runHTTPRedirector()
+			} else {
+				NoHTTPRedirector()
+			}
+		}
+		err = runHTTPS("tcp", listenAddr, "Web", setting.CertFile, setting.KeyFile, m, setting.UseProxyProtocol, setting.ProxyProtocolTLSBridging)
 	case setting.FCGI:
-		listener, err := net.Listen("tcp", listenAddr)
-		if err != nil {
-			log.Fatal(4, "Failed to bind %s", listenAddr, err)
+		if handleRedirector {
+			NoHTTPRedirector()
 		}
-		defer listener.Close()
-		err = fcgi.Serve(listener, context2.ClearHandler(m))
-	case setting.UnixSocket:
-		if err := os.Remove(listenAddr); err != nil && !os.IsNotExist(err) {
-			log.Fatal(4, "Failed to remove unix socket directory %s: %v", listenAddr, err)
+		err = runFCGI("tcp", listenAddr, "FCGI Web", m, setting.UseProxyProtocol)
+	case setting.HTTPUnix:
+		if handleRedirector {
+			NoHTTPRedirector()
 		}
-		var listener *net.UnixListener
-		listener, err = net.ListenUnix("unix", &net.UnixAddr{Name: listenAddr, Net: "unix"})
-		if err != nil {
-			break // Handle error after switch
+		err = runHTTP("unix", listenAddr, "Web", m, setting.UseProxyProtocol)
+	case setting.FCGIUnix:
+		if handleRedirector {
+			NoHTTPRedirector()
 		}
-
-		// FIXME: add proper implementation of signal capture on all protocols
-		// execute this on SIGTERM or SIGINT: listener.Close()
-		if err = os.Chmod(listenAddr, os.FileMode(setting.UnixSocketPermission)); err != nil {
-			log.Fatal(4, "Failed to set permission of unix socket: %v", err)
-		}
-		err = http.Serve(listener, context2.ClearHandler(m))
+		err = runFCGI("unix", listenAddr, "Web", m, setting.UseProxyProtocol)
 	default:
-		log.Fatal(4, "Invalid protocol: %s", setting.Protocol)
+		log.Fatal("Invalid protocol: %s", setting.Protocol)
 	}
-
 	if err != nil {
-		log.Fatal(4, "Failed to start server: %v", err)
+		log.Critical("Failed to start server: %v", err)
 	}
-
-	return nil
+	log.Info("HTTP Listener: %s Closed", listenAddr)
+	return err
 }

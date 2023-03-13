@@ -1,31 +1,38 @@
 // Copyright 2016 The Gogs Authors. All rights reserved.
+// Copyright 2020 The Gitea Authors.
 // Use of this source code is governed by a MIT-style
 // license that can be found in the LICENSE file.
 
 package user
 
 import (
-	api "code.gitea.io/sdk/gitea"
+	"net/http"
 
-	"code.gitea.io/gitea/models"
+	"code.gitea.io/gitea/models/db"
+	access_model "code.gitea.io/gitea/models/perm/access"
+	repo_model "code.gitea.io/gitea/models/repo"
+	user_model "code.gitea.io/gitea/models/user"
 	"code.gitea.io/gitea/modules/context"
+	"code.gitea.io/gitea/modules/convert"
+	api "code.gitea.io/gitea/modules/structs"
+	"code.gitea.io/gitea/routers/api/v1/utils"
 )
 
 // getStarredRepos returns the repos that the user with the specified userID has
 // starred
-func getStarredRepos(userID int64, private bool) ([]*api.Repository, error) {
-	starredRepos, err := models.GetStarredRepos(userID, private)
+func getStarredRepos(user *user_model.User, private bool, listOptions db.ListOptions) ([]*api.Repository, error) {
+	starredRepos, err := repo_model.GetStarredRepos(user.ID, private, listOptions)
 	if err != nil {
 		return nil, err
 	}
 
 	repos := make([]*api.Repository, len(starredRepos))
 	for i, starred := range starredRepos {
-		access, err := models.AccessLevel(userID, starred)
+		access, err := access_model.AccessLevel(user, starred)
 		if err != nil {
 			return nil, err
 		}
-		repos[i] = starred.APIFormat(access)
+		repos[i] = convert.ToRepo(starred, access)
 	}
 	return repos, nil
 }
@@ -43,16 +50,27 @@ func GetStarredRepos(ctx *context.APIContext) {
 	//   description: username of user
 	//   type: string
 	//   required: true
+	// - name: page
+	//   in: query
+	//   description: page number of results to return (1-based)
+	//   type: integer
+	// - name: limit
+	//   in: query
+	//   description: page size of results
+	//   type: integer
 	// responses:
 	//   "200":
 	//     "$ref": "#/responses/RepositoryList"
-	user := GetUserByParams(ctx)
-	private := user.ID == ctx.User.ID
-	repos, err := getStarredRepos(user.ID, private)
+
+	private := ctx.ContextUser.ID == ctx.Doer.ID
+	repos, err := getStarredRepos(ctx.ContextUser, private, utils.GetListOptions(ctx))
 	if err != nil {
-		ctx.Error(500, "getStarredRepos", err)
+		ctx.Error(http.StatusInternalServerError, "getStarredRepos", err)
+		return
 	}
-	ctx.JSON(200, &repos)
+
+	ctx.SetTotalCountHeader(int64(ctx.ContextUser.NumStars))
+	ctx.JSON(http.StatusOK, &repos)
 }
 
 // GetMyStarredRepos returns the repos that the authenticated user has starred
@@ -60,16 +78,28 @@ func GetMyStarredRepos(ctx *context.APIContext) {
 	// swagger:operation GET /user/starred user userCurrentListStarred
 	// ---
 	// summary: The repos that the authenticated user has starred
+	// parameters:
+	// - name: page
+	//   in: query
+	//   description: page number of results to return (1-based)
+	//   type: integer
+	// - name: limit
+	//   in: query
+	//   description: page size of results
+	//   type: integer
 	// produces:
 	// - application/json
 	// responses:
 	//   "200":
 	//     "$ref": "#/responses/RepositoryList"
-	repos, err := getStarredRepos(ctx.User.ID, true)
+
+	repos, err := getStarredRepos(ctx.Doer, true, utils.GetListOptions(ctx))
 	if err != nil {
-		ctx.Error(500, "getStarredRepos", err)
+		ctx.Error(http.StatusInternalServerError, "getStarredRepos", err)
 	}
-	ctx.JSON(200, &repos)
+
+	ctx.SetTotalCountHeader(int64(ctx.Doer.NumStars))
+	ctx.JSON(http.StatusOK, &repos)
 }
 
 // IsStarring returns whether the authenticated is starring the repo
@@ -93,10 +123,11 @@ func IsStarring(ctx *context.APIContext) {
 	//     "$ref": "#/responses/empty"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
-	if models.IsStaring(ctx.User.ID, ctx.Repo.Repository.ID) {
-		ctx.Status(204)
+
+	if repo_model.IsStaring(ctx, ctx.Doer.ID, ctx.Repo.Repository.ID) {
+		ctx.Status(http.StatusNoContent)
 	} else {
-		ctx.Status(404)
+		ctx.NotFound()
 	}
 }
 
@@ -119,12 +150,13 @@ func Star(ctx *context.APIContext) {
 	// responses:
 	//   "204":
 	//     "$ref": "#/responses/empty"
-	err := models.StarRepo(ctx.User.ID, ctx.Repo.Repository.ID, true)
+
+	err := repo_model.StarRepo(ctx.Doer.ID, ctx.Repo.Repository.ID, true)
 	if err != nil {
-		ctx.Error(500, "StarRepo", err)
+		ctx.Error(http.StatusInternalServerError, "StarRepo", err)
 		return
 	}
-	ctx.Status(204)
+	ctx.Status(http.StatusNoContent)
 }
 
 // Unstar the repo specified in the APIContext, as the authenticated user
@@ -146,10 +178,11 @@ func Unstar(ctx *context.APIContext) {
 	// responses:
 	//   "204":
 	//     "$ref": "#/responses/empty"
-	err := models.StarRepo(ctx.User.ID, ctx.Repo.Repository.ID, false)
+
+	err := repo_model.StarRepo(ctx.Doer.ID, ctx.Repo.Repository.ID, false)
 	if err != nil {
-		ctx.Error(500, "StarRepo", err)
+		ctx.Error(http.StatusInternalServerError, "StarRepo", err)
 		return
 	}
-	ctx.Status(204)
+	ctx.Status(http.StatusNoContent)
 }

@@ -10,24 +10,67 @@ import (
 
 	"code.gitea.io/gitea/modules/setting"
 
-	mc "github.com/go-macaron/cache"
+	mc "gitea.com/go-chi/cache"
+
+	_ "gitea.com/go-chi/cache/memcache" // memcache plugin for cache
 )
 
 var conn mc.Cache
 
+func newCache(cacheConfig setting.Cache) (mc.Cache, error) {
+	return mc.NewCacher(mc.Options{
+		Adapter:       cacheConfig.Adapter,
+		AdapterConfig: cacheConfig.Conn,
+		Interval:      cacheConfig.Interval,
+	})
+}
+
 // NewContext start cache service
 func NewContext() error {
-	if setting.CacheService == nil || conn != nil {
-		return nil
+	var err error
+
+	if conn == nil && setting.CacheService.Enabled {
+		if conn, err = newCache(setting.CacheService.Cache); err != nil {
+			return err
+		}
+		if err = conn.Ping(); err != nil {
+			return err
+		}
 	}
 
-	var err error
-	conn, err = mc.NewCacher(setting.CacheService.Adapter, mc.Options{
-		Adapter:       setting.CacheService.Adapter,
-		AdapterConfig: setting.CacheService.Conn,
-		Interval:      setting.CacheService.Interval,
-	})
 	return err
+}
+
+// GetCache returns the currently configured cache
+func GetCache() mc.Cache {
+	return conn
+}
+
+// GetString returns the key value from cache with callback when no key exists in cache
+func GetString(key string, getFunc func() (string, error)) (string, error) {
+	if conn == nil || setting.CacheService.TTL == 0 {
+		return getFunc()
+	}
+
+	cached := conn.Get(key)
+
+	if cached == nil {
+		value, err := getFunc()
+		if err != nil {
+			return value, err
+		}
+		return value, conn.Put(key, value, setting.CacheService.TTLSeconds())
+	}
+
+	if value, ok := cached.(string); ok {
+		return value, nil
+	}
+
+	if stringer, ok := cached.(fmt.Stringer); ok {
+		return stringer.String(), nil
+	}
+
+	return fmt.Sprintf("%s", cached), nil
 }
 
 // GetInt returns key value from cache with callback when no key exists in cache
@@ -35,27 +78,33 @@ func GetInt(key string, getFunc func() (int, error)) (int, error) {
 	if conn == nil || setting.CacheService.TTL == 0 {
 		return getFunc()
 	}
-	if !conn.IsExist(key) {
-		var (
-			value int
-			err   error
-		)
-		if value, err = getFunc(); err != nil {
+
+	cached := conn.Get(key)
+
+	if cached == nil {
+		value, err := getFunc()
+		if err != nil {
 			return value, err
 		}
-		conn.Put(key, value, int64(setting.CacheService.TTL.Seconds()))
+
+		return value, conn.Put(key, value, setting.CacheService.TTLSeconds())
 	}
-	switch value := conn.Get(key).(type) {
+
+	switch v := cached.(type) {
 	case int:
-		return value, nil
+		return v, nil
 	case string:
-		v, err := strconv.Atoi(value)
+		value, err := strconv.Atoi(v)
 		if err != nil {
 			return 0, err
 		}
-		return v, nil
+		return value, nil
 	default:
-		return 0, fmt.Errorf("Unsupported cached value type: %v", value)
+		value, err := getFunc()
+		if err != nil {
+			return value, err
+		}
+		return value, conn.Put(key, value, setting.CacheService.TTLSeconds())
 	}
 }
 
@@ -64,27 +113,34 @@ func GetInt64(key string, getFunc func() (int64, error)) (int64, error) {
 	if conn == nil || setting.CacheService.TTL == 0 {
 		return getFunc()
 	}
-	if !conn.IsExist(key) {
-		var (
-			value int64
-			err   error
-		)
-		if value, err = getFunc(); err != nil {
+
+	cached := conn.Get(key)
+
+	if cached == nil {
+		value, err := getFunc()
+		if err != nil {
 			return value, err
 		}
-		conn.Put(key, value, int64(setting.CacheService.TTL.Seconds()))
+
+		return value, conn.Put(key, value, setting.CacheService.TTLSeconds())
 	}
-	switch value := conn.Get(key).(type) {
+
+	switch v := conn.Get(key).(type) {
 	case int64:
-		return value, nil
+		return v, nil
 	case string:
-		v, err := strconv.ParseInt(value, 10, 64)
+		value, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
 			return 0, err
 		}
-		return v, nil
+		return value, nil
 	default:
-		return 0, fmt.Errorf("Unsupported cached value type: %v", value)
+		value, err := getFunc()
+		if err != nil {
+			return value, err
+		}
+
+		return value, conn.Put(key, value, setting.CacheService.TTLSeconds())
 	}
 }
 
@@ -93,5 +149,5 @@ func Remove(key string) {
 	if conn == nil {
 		return
 	}
-	conn.Delete(key)
+	_ = conn.Delete(key)
 }

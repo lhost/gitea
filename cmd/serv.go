@@ -6,26 +6,36 @@
 package cmd
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
-	"code.gitea.io/gitea/models"
+	asymkey_model "code.gitea.io/gitea/models/asymkey"
+	git_model "code.gitea.io/gitea/models/git"
+	"code.gitea.io/gitea/models/perm"
+	"code.gitea.io/gitea/modules/git"
+	"code.gitea.io/gitea/modules/json"
 	"code.gitea.io/gitea/modules/log"
+	"code.gitea.io/gitea/modules/pprof"
 	"code.gitea.io/gitea/modules/private"
+	"code.gitea.io/gitea/modules/process"
+	repo_module "code.gitea.io/gitea/modules/repository"
 	"code.gitea.io/gitea/modules/setting"
+	"code.gitea.io/gitea/services/lfs"
 
-	"github.com/Unknwon/com"
-	"github.com/dgrijalva/jwt-go"
+	"github.com/golang-jwt/jwt/v4"
+	"github.com/kballard/go-shellquote"
 	"github.com/urfave/cli"
 )
 
 const (
-	accessDenied        = "Repository does not exist or you do not have access"
 	lfsAuthenticateVerb = "git-lfs-authenticate"
 )
 
@@ -33,73 +43,82 @@ const (
 var CmdServ = cli.Command{
 	Name:        "serv",
 	Usage:       "This command should only be called by SSH shell",
-	Description: `Serv provide access auth for repositories`,
+	Description: "Serv provides access auth for repositories",
 	Action:      runServ,
 	Flags: []cli.Flag{
-		cli.StringFlag{
-			Name:  "config, c",
-			Value: "custom/conf/app.ini",
-			Usage: "Custom configuration file path",
+		cli.BoolFlag{
+			Name: "enable-pprof",
+		},
+		cli.BoolFlag{
+			Name: "debug",
 		},
 	},
 }
 
-func setup(logPath string) error {
-	setting.NewContext()
-	log.NewGitLogger(filepath.Join(setting.LogRootPath, logPath))
-	models.LoadConfigs()
+func setup(logPath string, debug bool) {
+	_ = log.DelLogger("console")
+	if debug {
+		_ = log.NewLogger(1000, "console", "console", `{"level":"trace","stacktracelevel":"NONE","stderr":true}`)
+	} else {
+		_ = log.NewLogger(1000, "console", "console", `{"level":"fatal","stacktracelevel":"NONE","stderr":true}`)
+	}
+	setting.LoadFromExisting()
+	if debug {
+		setting.RunMode = "dev"
+	}
 
-	if setting.UseSQLite3 || setting.UseTiDB {
-		workPath := setting.AppWorkPath
-		if err := os.Chdir(workPath); err != nil {
-			log.GitLogger.Fatal(4, "Failed to change directory %s: %v", workPath, err)
+	// Check if setting.RepoRootPath exists. It could be the case that it doesn't exist, this can happen when
+	// `[repository]` `ROOT` is a relative path and $GITEA_WORK_DIR isn't passed to the SSH connection.
+	if _, err := os.Stat(setting.RepoRootPath); err != nil {
+		if os.IsNotExist(err) {
+			_ = fail("Incorrect configuration, no repository directory.", "Directory `[repository].ROOT` %q was not found, please check if $GITEA_WORK_DIR is passed to the SSH connection or make `[repository].ROOT` an absolute value.", setting.RepoRootPath)
+		} else {
+			_ = fail("Incorrect configuration, repository directory is inaccessible", "Directory `[repository].ROOT` %q is inaccessible. err: %v", setting.RepoRootPath, err)
 		}
-	}
-
-	setting.NewXORMLogService(true)
-	return models.SetEngine()
-}
-
-func parseCmd(cmd string) (string, string) {
-	ss := strings.SplitN(cmd, " ", 2)
-	if len(ss) != 2 {
-		return "", ""
-	}
-	return ss[0], strings.Replace(ss[1], "'/", "'", 1)
-}
-
-var (
-	allowedCommands = map[string]models.AccessMode{
-		"git-upload-pack":    models.AccessModeRead,
-		"git-upload-archive": models.AccessModeRead,
-		"git-receive-pack":   models.AccessModeWrite,
-		lfsAuthenticateVerb:  models.AccessModeNone,
-	}
-)
-
-func fail(userMessage, logMessage string, args ...interface{}) {
-	fmt.Fprintln(os.Stderr, "Gitea:", userMessage)
-
-	if len(logMessage) > 0 {
-		if !setting.ProdMode {
-			fmt.Fprintf(os.Stderr, logMessage+"\n", args...)
-		}
-		log.GitLogger.Fatal(3, logMessage, args...)
 		return
 	}
 
-	log.GitLogger.Close()
-	os.Exit(1)
+	if err := git.InitSimple(context.Background()); err != nil {
+		_ = fail("Failed to init git", "Failed to init git, err: %v", err)
+	}
+}
+
+var (
+	allowedCommands = map[string]perm.AccessMode{
+		"git-upload-pack":    perm.AccessModeRead,
+		"git-upload-archive": perm.AccessModeRead,
+		"git-receive-pack":   perm.AccessModeWrite,
+		lfsAuthenticateVerb:  perm.AccessModeNone,
+	}
+	alphaDashDotPattern = regexp.MustCompile(`[^\w-\.]`)
+)
+
+func fail(userMessage, logMessage string, args ...interface{}) error {
+	// There appears to be a chance to cause a zombie process and failure to read the Exit status
+	// if nothing is outputted on stdout.
+	_, _ = fmt.Fprintln(os.Stdout, "")
+	_, _ = fmt.Fprintln(os.Stderr, "Gitea:", userMessage)
+
+	if len(logMessage) > 0 {
+		if !setting.IsProd {
+			_, _ = fmt.Fprintf(os.Stderr, logMessage+"\n", args...)
+		}
+	}
+	ctx, cancel := installSignals()
+	defer cancel()
+
+	if len(logMessage) > 0 {
+		_ = private.SSHLog(ctx, true, fmt.Sprintf(logMessage+": ", args...))
+	}
+	return cli.NewExitError("", 1)
 }
 
 func runServ(c *cli.Context) error {
-	if c.IsSet("config") {
-		setting.CustomConf = c.String("config")
-	}
+	ctx, cancel := installSignals()
+	defer cancel()
 
-	if err := setup("serv.log"); err != nil {
-		fail("System init failed", fmt.Sprintf("setup: %v", err))
-	}
+	// FIXME: This needs to internationalised
+	setup("serv.log", c.Bool("debug"))
 
 	if setting.SSH.Disabled {
 		println("Gitea: SSH has been disabled")
@@ -107,179 +126,157 @@ func runServ(c *cli.Context) error {
 	}
 
 	if len(c.Args()) < 1 {
-		cli.ShowSubcommandHelp(c)
+		if err := cli.ShowSubcommandHelp(c); err != nil {
+			fmt.Printf("error showing subcommand help: %v\n", err)
+		}
 		return nil
+	}
+
+	keys := strings.Split(c.Args()[0], "-")
+	if len(keys) != 2 || keys[0] != "key" {
+		return fail("Key ID format error", "Invalid key argument: %s", c.Args()[0])
+	}
+	keyID, err := strconv.ParseInt(keys[1], 10, 64)
+	if err != nil {
+		return fail("Key ID format error", "Invalid key argument: %s", c.Args()[1])
 	}
 
 	cmd := os.Getenv("SSH_ORIGINAL_COMMAND")
 	if len(cmd) == 0 {
-		println("Hi there, You've successfully authenticated, but Gitea does not provide shell access.")
+		key, user, err := private.ServNoCommand(ctx, keyID)
+		if err != nil {
+			return fail("Internal error", "Failed to check provided key: %v", err)
+		}
+		switch key.Type {
+		case asymkey_model.KeyTypeDeploy:
+			println("Hi there! You've successfully authenticated with the deploy key named " + key.Name + ", but Gitea does not provide shell access.")
+		case asymkey_model.KeyTypePrincipal:
+			println("Hi there! You've successfully authenticated with the principal " + key.Content + ", but Gitea does not provide shell access.")
+		default:
+			println("Hi there, " + user.Name + "! You've successfully authenticated with the key named " + key.Name + ", but Gitea does not provide shell access.")
+		}
 		println("If this is unexpected, please log in with password and setup Gitea under another user.")
 		return nil
+	} else if c.Bool("debug") {
+		log.Debug("SSH_ORIGINAL_COMMAND: %s", os.Getenv("SSH_ORIGINAL_COMMAND"))
 	}
 
-	verb, args := parseCmd(cmd)
+	words, err := shellquote.Split(cmd)
+	if err != nil {
+		return fail("Error parsing arguments", "Failed to parse arguments: %v", err)
+	}
+
+	if len(words) < 2 {
+		if git.CheckGitVersionAtLeast("2.29") == nil {
+			// for AGit Flow
+			if cmd == "ssh_info" {
+				fmt.Print(`{"type":"gitea","version":1}`)
+				return nil
+			}
+		}
+		return fail("Too few arguments", "Too few arguments in cmd: %s", cmd)
+	}
+
+	verb := words[0]
+	repoPath := words[1]
+	if repoPath[0] == '/' {
+		repoPath = repoPath[1:]
+	}
 
 	var lfsVerb string
 	if verb == lfsAuthenticateVerb {
 		if !setting.LFS.StartServer {
-			fail("Unknown git command", "LFS authentication request over SSH denied, LFS support is disabled")
+			return fail("Unknown git command", "LFS authentication request over SSH denied, LFS support is disabled")
 		}
 
-		argsSplit := strings.Split(args, " ")
-		if len(argsSplit) >= 2 {
-			args = strings.TrimSpace(argsSplit[0])
-			lfsVerb = strings.TrimSpace(argsSplit[1])
+		if len(words) > 2 {
+			lfsVerb = words[2]
 		}
 	}
 
-	repoPath := strings.ToLower(strings.Trim(args, "'"))
+	// LowerCase and trim the repoPath as that's how they are stored.
+	repoPath = strings.ToLower(strings.TrimSpace(repoPath))
+
 	rr := strings.SplitN(repoPath, "/", 2)
 	if len(rr) != 2 {
-		fail("Invalid repository path", "Invalid repository path: %v", args)
+		return fail("Invalid repository path", "Invalid repository path: %v", repoPath)
 	}
 
 	username := strings.ToLower(rr[0])
 	reponame := strings.ToLower(strings.TrimSuffix(rr[1], ".git"))
 
-	isWiki := false
-	unitType := models.UnitTypeCode
-	if strings.HasSuffix(reponame, ".wiki") {
-		isWiki = true
-		unitType = models.UnitTypeWiki
-		reponame = reponame[:len(reponame)-5]
+	if alphaDashDotPattern.MatchString(reponame) {
+		return fail("Invalid repo name", "Invalid repo name: %s", reponame)
 	}
 
-	os.Setenv(models.EnvRepoUsername, username)
-	if isWiki {
-		os.Setenv(models.EnvRepoIsWiki, "true")
-	} else {
-		os.Setenv(models.EnvRepoIsWiki, "false")
-	}
-	os.Setenv(models.EnvRepoName, reponame)
-
-	repoUser, err := models.GetUserByName(username)
-	if err != nil {
-		if models.IsErrUserNotExist(err) {
-			fail("Repository owner does not exist", "Unregistered owner: %s", username)
+	if c.Bool("enable-pprof") {
+		if err := os.MkdirAll(setting.PprofDataPath, os.ModePerm); err != nil {
+			return fail("Error while trying to create PPROF_DATA_PATH", "Error while trying to create PPROF_DATA_PATH: %v", err)
 		}
-		fail("Internal error", "Failed to get repository owner (%s): %v", username, err)
-	}
 
-	repo, err := models.GetRepositoryByName(repoUser.ID, reponame)
-	if err != nil {
-		if models.IsErrRepoNotExist(err) {
-			fail(accessDenied, "Repository does not exist: %s/%s", repoUser.Name, reponame)
+		stopCPUProfiler, err := pprof.DumpCPUProfileForUsername(setting.PprofDataPath, username)
+		if err != nil {
+			return fail("Internal Server Error", "Unable to start CPU profile: %v", err)
 		}
-		fail("Internal error", "Failed to get repository: %v", err)
+		defer func() {
+			stopCPUProfiler()
+			err := pprof.DumpMemProfileForUsername(setting.PprofDataPath, username)
+			if err != nil {
+				_ = fail("Internal Server Error", "Unable to dump Mem Profile: %v", err)
+			}
+		}()
 	}
 
 	requestedMode, has := allowedCommands[verb]
 	if !has {
-		fail("Unknown git command", "Unknown git command %s", verb)
+		return fail("Unknown git command", "Unknown git command %s", verb)
 	}
 
 	if verb == lfsAuthenticateVerb {
 		if lfsVerb == "upload" {
-			requestedMode = models.AccessModeWrite
+			requestedMode = perm.AccessModeWrite
 		} else if lfsVerb == "download" {
-			requestedMode = models.AccessModeRead
+			requestedMode = perm.AccessModeRead
 		} else {
-			fail("Unknown LFS verb", "Unknown lfs verb %s", lfsVerb)
+			return fail("Unknown LFS verb", "Unknown lfs verb %s", lfsVerb)
 		}
 	}
 
-	// Prohibit push to mirror repositories.
-	if requestedMode > models.AccessModeRead && repo.IsMirror {
-		fail("mirror repository is read-only", "")
+	results, err := private.ServCommand(ctx, keyID, username, reponame, requestedMode, verb, lfsVerb)
+	if err != nil {
+		if private.IsErrServCommand(err) {
+			errServCommand := err.(private.ErrServCommand)
+			if errServCommand.StatusCode != http.StatusInternalServerError {
+				return fail("Unauthorized", "%s", errServCommand.Error())
+			}
+			return fail("Internal Server Error", "%s", errServCommand.Error())
+		}
+		return fail("Internal Server Error", "%s", err.Error())
 	}
 
-	// Allow anonymous clone for public repositories.
-	var (
-		keyID int64
-		user  *models.User
-	)
-	if requestedMode == models.AccessModeWrite || repo.IsPrivate {
-		keys := strings.Split(c.Args()[0], "-")
-		if len(keys) != 2 {
-			fail("Key ID format error", "Invalid key argument: %s", c.Args()[0])
-		}
-
-		key, err := models.GetPublicKeyByID(com.StrTo(keys[1]).MustInt64())
-		if err != nil {
-			fail("Invalid key ID", "Invalid key ID[%s]: %v", c.Args()[0], err)
-		}
-		keyID = key.ID
-
-		// Check deploy key or user key.
-		if key.Type == models.KeyTypeDeploy {
-			if key.Mode < requestedMode {
-				fail("Key permission denied", "Cannot push with deployment key: %d", key.ID)
-			}
-			// Check if this deploy key belongs to current repository.
-			if !models.HasDeployKey(key.ID, repo.ID) {
-				fail("Key access denied", "Deploy key access denied: [key_id: %d, repo_id: %d]", key.ID, repo.ID)
-			}
-
-			// Update deploy key activity.
-			deployKey, err := models.GetDeployKeyByRepo(key.ID, repo.ID)
-			if err != nil {
-				fail("Internal error", "GetDeployKey: %v", err)
-			}
-
-			deployKey.Updated = time.Now()
-			if err = models.UpdateDeployKey(deployKey); err != nil {
-				fail("Internal error", "UpdateDeployKey: %v", err)
-			}
-		} else {
-			user, err = models.GetUserByKeyID(key.ID)
-			if err != nil {
-				fail("internal error", "Failed to get user by key ID(%d): %v", keyID, err)
-			}
-
-			mode, err := models.AccessLevel(user.ID, repo)
-			if err != nil {
-				fail("Internal error", "Failed to check access: %v", err)
-			} else if mode < requestedMode {
-				clientMessage := accessDenied
-				if mode >= models.AccessModeRead {
-					clientMessage = "You do not have sufficient authorization for this action"
-				}
-				fail(clientMessage,
-					"User %s does not have level %v access to repository %s",
-					user.Name, requestedMode, repoPath)
-			}
-
-			if !repo.CheckUnitUser(user.ID, user.IsAdmin, unitType) {
-				fail("You do not have allowed for this action",
-					"User %s does not have allowed access to repository %s 's code",
-					user.Name, repoPath)
-			}
-
-			os.Setenv(models.EnvPusherName, user.Name)
-			os.Setenv(models.EnvPusherID, fmt.Sprintf("%d", user.ID))
-		}
-	}
-
-	//LFS token authentication
+	// LFS token authentication
 	if verb == lfsAuthenticateVerb {
-		url := fmt.Sprintf("%s%s/%s.git/info/lfs", setting.AppURL, repoUser.Name, repo.Name)
+		url := fmt.Sprintf("%s%s/%s.git/info/lfs", setting.AppURL, url.PathEscape(results.OwnerName), url.PathEscape(results.RepoName))
 
 		now := time.Now()
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			"repo": repo.ID,
-			"op":   lfsVerb,
-			"exp":  now.Add(5 * time.Minute).Unix(),
-			"nbf":  now.Unix(),
-		})
+		claims := lfs.Claims{
+			RegisteredClaims: jwt.RegisteredClaims{
+				ExpiresAt: jwt.NewNumericDate(now.Add(setting.LFS.HTTPAuthExpiry)),
+				NotBefore: jwt.NewNumericDate(now),
+			},
+			RepoID: results.RepoID,
+			Op:     lfsVerb,
+			UserID: results.UserID,
+		}
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 
 		// Sign and get the complete encoded token as a string using the secret
 		tokenString, err := token.SignedString(setting.LFS.JWTSecretBytes)
 		if err != nil {
-			fail("Internal error", "Failed to sign JWT token: %v", err)
+			return fail("Internal error", "Failed to sign JWT token: %v", err)
 		}
 
-		tokenAuthentication := &models.LFSTokenResponse{
+		tokenAuthentication := &git_model.LFSTokenResponse{
 			Header: make(map[string]string),
 			Href:   url,
 		}
@@ -288,9 +285,8 @@ func runServ(c *cli.Context) error {
 		enc := json.NewEncoder(os.Stdout)
 		err = enc.Encode(tokenAuthentication)
 		if err != nil {
-			fail("Internal error", "Failed to encode LFS json response: %v", err)
+			return fail("Internal error", "Failed to encode LFS json response: %v", err)
 		}
-
 		return nil
 	}
 
@@ -302,31 +298,42 @@ func runServ(c *cli.Context) error {
 	var gitcmd *exec.Cmd
 	verbs := strings.Split(verb, " ")
 	if len(verbs) == 2 {
-		gitcmd = exec.Command(verbs[0], verbs[1], repoPath)
+		gitcmd = exec.CommandContext(ctx, verbs[0], verbs[1], repoPath)
 	} else {
-		gitcmd = exec.Command(verb, repoPath)
+		gitcmd = exec.CommandContext(ctx, verb, repoPath)
 	}
 
-	if isWiki {
-		if err = repo.InitWiki(); err != nil {
-			fail("Internal error", "Failed to init wiki repo: %v", err)
-		}
-	}
-
-	os.Setenv(models.ProtectedBranchRepoID, fmt.Sprintf("%d", repo.ID))
-
+	process.SetSysProcAttribute(gitcmd)
 	gitcmd.Dir = setting.RepoRootPath
 	gitcmd.Stdout = os.Stdout
 	gitcmd.Stdin = os.Stdin
 	gitcmd.Stderr = os.Stderr
+	gitcmd.Env = append(gitcmd.Env, os.Environ()...)
+	gitcmd.Env = append(gitcmd.Env,
+		repo_module.EnvRepoIsWiki+"="+strconv.FormatBool(results.IsWiki),
+		repo_module.EnvRepoName+"="+results.RepoName,
+		repo_module.EnvRepoUsername+"="+results.OwnerName,
+		repo_module.EnvPusherName+"="+results.UserName,
+		repo_module.EnvPusherEmail+"="+results.UserEmail,
+		repo_module.EnvPusherID+"="+strconv.FormatInt(results.UserID, 10),
+		repo_module.EnvRepoID+"="+strconv.FormatInt(results.RepoID, 10),
+		repo_module.EnvPRID+"="+fmt.Sprintf("%d", 0),
+		repo_module.EnvDeployKeyID+"="+fmt.Sprintf("%d", results.DeployKeyID),
+		repo_module.EnvKeyID+"="+fmt.Sprintf("%d", results.KeyID),
+		repo_module.EnvAppURL+"="+setting.AppURL,
+	)
+	// to avoid breaking, here only use the minimal environment variables for the "gitea serv" command.
+	// it could be re-considered whether to use the same git.CommonGitCmdEnvs() as "git" command later.
+	gitcmd.Env = append(gitcmd.Env, git.CommonCmdServEnvs()...)
+
 	if err = gitcmd.Run(); err != nil {
-		fail("Internal error", "Failed to execute git command: %v", err)
+		return fail("Internal error", "Failed to execute git command: %v", err)
 	}
 
 	// Update user key activity.
-	if keyID > 0 {
-		if err = private.UpdatePublicKeyUpdated(keyID); err != nil {
-			fail("Internal error", "UpdatePublicKey: %v", err)
+	if results.KeyID > 0 {
+		if err = private.UpdatePublicKeyInRepo(ctx, results.KeyID, results.RepoID); err != nil {
+			return fail("Internal error", "UpdatePublicKeyInRepo: %v", err)
 		}
 	}
 

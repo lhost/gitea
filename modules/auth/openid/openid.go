@@ -5,8 +5,9 @@
 package openid
 
 import (
-	"github.com/yohcop/openid-go"
 	"time"
+
+	"github.com/yohcop/openid-go"
 )
 
 // For the demo, we use in-memory infinite storage nonce and discovery
@@ -16,8 +17,10 @@ import (
 // If you have multiple servers for example, you may need to share at
 // least
 // the nonceStore between them.
-var nonceStore = openid.NewSimpleNonceStore()
-var discoveryCache = newTimedDiscoveryCache(24 * time.Hour)
+var (
+	nonceStore     = openid.NewSimpleNonceStore()
+	discoveryCache = newTimedDiscoveryCache(24 * time.Hour)
+)
 
 // Verify handles response from OpenID provider
 func Verify(fullURL string) (id string, err error) {

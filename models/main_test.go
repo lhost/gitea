@@ -1,35 +1,41 @@
+// Copyright 2020 The Gitea Authors. All rights reserved.
+// Use of this source code is governed by a MIT-style
+// license that can be found in the LICENSE file.
+
 package models
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 
+	activities_model "code.gitea.io/gitea/models/activities"
+	"code.gitea.io/gitea/models/organization"
+	repo_model "code.gitea.io/gitea/models/repo"
+	"code.gitea.io/gitea/models/unittest"
+	user_model "code.gitea.io/gitea/models/user"
 	"code.gitea.io/gitea/modules/setting"
 
-	_ "github.com/mattn/go-sqlite3" // for the test engine
+	_ "code.gitea.io/gitea/models/system"
+
 	"github.com/stretchr/testify/assert"
 )
 
+func init() {
+	setting.SetCustomPathAndConf("", "", "")
+	setting.LoadForTest()
+}
+
 // TestFixturesAreConsistent assert that test fixtures are consistent
 func TestFixturesAreConsistent(t *testing.T) {
-	assert.NoError(t, PrepareTestDatabase())
-	CheckConsistencyForAll(t)
+	assert.NoError(t, unittest.PrepareTestDatabase())
+	unittest.CheckConsistencyFor(t,
+		&user_model.User{},
+		&repo_model.Repository{},
+		&organization.Team{},
+		&activities_model.Action{})
 }
 
 func TestMain(m *testing.M) {
-	if err := CreateTestEngine("fixtures/"); err != nil {
-		fmt.Printf("Error creating test engine: %v\n", err)
-		os.Exit(1)
-	}
-
-	setting.AppURL = "https://try.gitea.io/"
-	setting.RunUser = "runuser"
-	setting.SSH.Port = 3000
-	setting.SSH.Domain = "try.gitea.io"
-	setting.RepoRootPath = filepath.Join(os.TempDir(), "repos")
-	setting.AppDataPath = filepath.Join(os.TempDir(), "appdata")
-
-	os.Exit(m.Run())
+	unittest.MainTest(m, &unittest.TestOptions{
+		GiteaRootPath: "..",
+	})
 }
