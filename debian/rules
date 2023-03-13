@@ -27,7 +27,7 @@ static_swagger:
 	# Update script:
 	#   wget https://raw.githubusercontent.com/MTecknology/static_swagger-ui/master/build.py -O debian/helpers/swagger_build.py
 	#   sed -i '/REMOVE/,/REMOVE/d' debian/helpers/swagger_build.py
-	SWAGGER_SRC=public/swagger.v1.json SWAGGER_DST=templates/swagger.tmpl python debian/helpers/swagger_build.py
+	#SWAGGER_SRC=public/swagger.v1.json SWAGGER_DST=templates/swagger.tmpl python debian/helpers/swagger_build.py
 
 # Tests are broken in debian build environments.
 override_dh_auto_test:
