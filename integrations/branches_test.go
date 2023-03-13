@@ -9,13 +9,12 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/PuerkitoBio/goquery"
-	"github.com/Unknwon/i18n"
 	"github.com/stretchr/testify/assert"
+	"github.com/unknwon/i18n"
 )
 
 func TestViewBranches(t *testing.T) {
-	prepareTestEnv(t)
+	defer prepareTestEnv(t)()
 
 	req := NewRequest(t, "GET", "/user2/repo1/branches")
 	resp := MakeRequest(t, req, http.StatusOK)
@@ -26,20 +25,20 @@ func TestViewBranches(t *testing.T) {
 }
 
 func TestDeleteBranch(t *testing.T) {
-	prepareTestEnv(t)
+	defer prepareTestEnv(t)()
 
 	deleteBranch(t)
 }
 
 func TestUndoDeleteBranch(t *testing.T) {
-	prepareTestEnv(t)
-
-	deleteBranch(t)
-	htmlDoc, name := branchAction(t, ".undo-button")
-	assert.Contains(t,
-		htmlDoc.doc.Find(".ui.positive.message").Text(),
-		i18n.Tr("en", "repo.branch.restore_success", name),
-	)
+	onGiteaRun(t, func(t *testing.T, u *url.URL) {
+		deleteBranch(t)
+		htmlDoc, name := branchAction(t, ".undo-button")
+		assert.Contains(t,
+			htmlDoc.doc.Find(".ui.positive.message").Text(),
+			i18n.Tr("en", "repo.branch.restore_success", name),
+		)
+	})
 }
 
 func deleteBranch(t *testing.T) {
@@ -57,23 +56,19 @@ func branchAction(t *testing.T, button string) (*HTMLDoc, string) {
 
 	htmlDoc := NewHTMLParser(t, resp.Body)
 	link, exists := htmlDoc.doc.Find(button).Attr("data-url")
-	assert.True(t, exists, "The template has changed")
+	if !assert.True(t, exists, "The template has changed") {
+		t.Skip()
+	}
 
-	htmlDoc = NewHTMLParser(t, resp.Body)
 	req = NewRequestWithValues(t, "POST", link, map[string]string{
-		"_csrf": getCsrf(htmlDoc.doc),
+		"_csrf": htmlDoc.GetCSRF(),
 	})
-	resp = session.MakeRequest(t, req, http.StatusOK)
+	session.MakeRequest(t, req, http.StatusOK)
 
 	url, err := url.Parse(link)
 	assert.NoError(t, err)
 	req = NewRequest(t, "GET", "/user2/repo1/branches")
 	resp = session.MakeRequest(t, req, http.StatusOK)
 
-	return NewHTMLParser(t, resp.Body), url.Query()["name"][0]
-}
-
-func getCsrf(doc *goquery.Document) string {
-	csrf, _ := doc.Find("meta[name=\"_csrf\"]").Attr("content")
-	return csrf
+	return NewHTMLParser(t, resp.Body), url.Query().Get("name")
 }

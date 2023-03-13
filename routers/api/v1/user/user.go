@@ -1,18 +1,18 @@
 // Copyright 2014 The Gogs Authors. All rights reserved.
+// Copyright 2020 The Gitea Authors.
 // Use of this source code is governed by a MIT-style
 // license that can be found in the LICENSE file.
 
 package user
 
 import (
-	"strings"
+	"net/http"
 
 	"code.gitea.io/gitea/models"
+	user_model "code.gitea.io/gitea/models/user"
 	"code.gitea.io/gitea/modules/context"
-	"code.gitea.io/gitea/modules/markup"
-	api "code.gitea.io/sdk/gitea"
-
-	"github.com/Unknwon/com"
+	"code.gitea.io/gitea/modules/convert"
+	"code.gitea.io/gitea/routers/api/v1/utils"
 )
 
 // Search search users
@@ -27,47 +27,55 @@ func Search(ctx *context.APIContext) {
 	//   in: query
 	//   description: keyword
 	//   type: string
+	// - name: uid
+	//   in: query
+	//   description: ID of the user to search for
+	//   type: integer
+	//   format: int64
+	// - name: page
+	//   in: query
+	//   description: page number of results to return (1-based)
+	//   type: integer
 	// - name: limit
 	//   in: query
-	//   description: maximum number of users to return
+	//   description: page size of results
 	//   type: integer
 	// responses:
 	//   "200":
-	//     "$ref": "#/responses/UserList"
-	opts := &models.SearchUserOptions{
-		Keyword:  strings.Trim(ctx.Query("q"), " "),
-		Type:     models.UserTypeIndividual,
-		PageSize: com.StrTo(ctx.Query("limit")).MustInt(),
-	}
-	if opts.PageSize == 0 {
-		opts.PageSize = 10
-	}
+	//     description: "SearchResults of a successful search"
+	//     schema:
+	//       type: object
+	//       properties:
+	//         ok:
+	//           type: boolean
+	//         data:
+	//           type: array
+	//           items:
+	//             "$ref": "#/definitions/User"
 
-	users, _, err := models.SearchUsers(opts)
+	listOptions := utils.GetListOptions(ctx)
+
+	users, maxResults, err := user_model.SearchUsers(&user_model.SearchUserOptions{
+		Actor:       ctx.User,
+		Keyword:     ctx.FormTrim("q"),
+		UID:         ctx.FormInt64("uid"),
+		Type:        user_model.UserTypeIndividual,
+		ListOptions: listOptions,
+	})
 	if err != nil {
-		ctx.JSON(500, map[string]interface{}{
+		ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"ok":    false,
 			"error": err.Error(),
 		})
 		return
 	}
 
-	results := make([]*api.User, len(users))
-	for i := range users {
-		results[i] = &api.User{
-			ID:        users[i].ID,
-			UserName:  users[i].Name,
-			AvatarURL: users[i].AvatarLink(),
-			FullName:  markup.Sanitize(users[i].FullName),
-		}
-		if ctx.IsSigned {
-			results[i].Email = users[i].Email
-		}
-	}
+	ctx.SetLinkHeader(int(maxResults), listOptions.PageSize)
+	ctx.SetTotalCountHeader(maxResults)
 
-	ctx.JSON(200, map[string]interface{}{
+	ctx.JSON(http.StatusOK, map[string]interface{}{
 		"ok":   true,
-		"data": results,
+		"data": convert.ToUsers(ctx.User, users),
 	})
 }
 
@@ -89,21 +97,19 @@ func GetInfo(ctx *context.APIContext) {
 	//     "$ref": "#/responses/User"
 	//   "404":
 	//     "$ref": "#/responses/notFound"
-	u, err := models.GetUserByName(ctx.Params(":username"))
-	if err != nil {
-		if models.IsErrUserNotExist(err) {
-			ctx.Status(404)
-		} else {
-			ctx.Error(500, "GetUserByName", err)
-		}
+
+	u := GetUserByParams(ctx)
+
+	if ctx.Written() {
 		return
 	}
 
-	// Hide user e-mail when API caller isn't signed in.
-	if !ctx.IsSigned {
-		u.Email = ""
+	if !models.IsUserVisibleToViewer(u, ctx.User) {
+		// fake ErrUserNotExist error message to not leak information about existence
+		ctx.NotFound("GetUserByName", user_model.ErrUserNotExist{Name: ctx.Params(":username")})
+		return
 	}
-	ctx.JSON(200, u.APIFormat())
+	ctx.JSON(http.StatusOK, convert.ToUser(u, ctx.User))
 }
 
 // GetAuthenticatedUser get current user's information
@@ -116,5 +122,38 @@ func GetAuthenticatedUser(ctx *context.APIContext) {
 	// responses:
 	//   "200":
 	//     "$ref": "#/responses/User"
-	ctx.JSON(200, ctx.User.APIFormat())
+
+	ctx.JSON(http.StatusOK, convert.ToUser(ctx.User, ctx.User))
+}
+
+// GetUserHeatmapData is the handler to get a users heatmap
+func GetUserHeatmapData(ctx *context.APIContext) {
+	// swagger:operation GET /users/{username}/heatmap user userGetHeatmapData
+	// ---
+	// summary: Get a user's heatmap
+	// produces:
+	// - application/json
+	// parameters:
+	// - name: username
+	//   in: path
+	//   description: username of user to get
+	//   type: string
+	//   required: true
+	// responses:
+	//   "200":
+	//     "$ref": "#/responses/UserHeatmapData"
+	//   "404":
+	//     "$ref": "#/responses/notFound"
+
+	user := GetUserByParams(ctx)
+	if ctx.Written() {
+		return
+	}
+
+	heatmap, err := models.GetUserHeatmapDataByUser(user, ctx.User)
+	if err != nil {
+		ctx.Error(http.StatusInternalServerError, "GetUserHeatmapDataByUser", err)
+		return
+	}
+	ctx.JSON(http.StatusOK, heatmap)
 }

@@ -6,10 +6,25 @@ package models
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
-	"github.com/go-xorm/xorm"
+	"code.gitea.io/gitea/models/db"
+	repo_model "code.gitea.io/gitea/models/repo"
+	user_model "code.gitea.io/gitea/models/user"
+	"code.gitea.io/gitea/modules/git"
+
+	"xorm.io/xorm"
 )
+
+// ActivityAuthorData represents statistical git commit count data
+type ActivityAuthorData struct {
+	Name       string `json:"name"`
+	Login      string `json:"login"`
+	AvatarLink string `json:"avatar_link"`
+	HomeLink   string `json:"home_link"`
+	Commits    int64  `json:"commits"`
+}
 
 // ActivityStats represets issue and pull request information.
 type ActivityStats struct {
@@ -24,30 +39,108 @@ type ActivityStats struct {
 	UnresolvedIssues            IssueList
 	PublishedReleases           []*Release
 	PublishedReleaseAuthorCount int64
+	Code                        *git.CodeActivityStats
 }
 
 // GetActivityStats return stats for repository at given time range
-func GetActivityStats(repoID int64, timeFrom time.Time, releases, issues, prs bool) (*ActivityStats, error) {
-	stats := &ActivityStats{}
+func GetActivityStats(repo *repo_model.Repository, timeFrom time.Time, releases, issues, prs, code bool) (*ActivityStats, error) {
+	stats := &ActivityStats{Code: &git.CodeActivityStats{}}
 	if releases {
-		if err := stats.FillReleases(repoID, timeFrom); err != nil {
+		if err := stats.FillReleases(repo.ID, timeFrom); err != nil {
 			return nil, fmt.Errorf("FillReleases: %v", err)
 		}
 	}
 	if prs {
-		if err := stats.FillPullRequests(repoID, timeFrom); err != nil {
+		if err := stats.FillPullRequests(repo.ID, timeFrom); err != nil {
 			return nil, fmt.Errorf("FillPullRequests: %v", err)
 		}
 	}
 	if issues {
-		if err := stats.FillIssues(repoID, timeFrom); err != nil {
+		if err := stats.FillIssues(repo.ID, timeFrom); err != nil {
 			return nil, fmt.Errorf("FillIssues: %v", err)
 		}
 	}
-	if err := stats.FillUnresolvedIssues(repoID, timeFrom, issues, prs); err != nil {
+	if err := stats.FillUnresolvedIssues(repo.ID, timeFrom, issues, prs); err != nil {
 		return nil, fmt.Errorf("FillUnresolvedIssues: %v", err)
 	}
+	if code {
+		gitRepo, err := git.OpenRepository(repo.RepoPath())
+		if err != nil {
+			return nil, fmt.Errorf("OpenRepository: %v", err)
+		}
+		defer gitRepo.Close()
+
+		code, err := gitRepo.GetCodeActivityStats(timeFrom, repo.DefaultBranch)
+		if err != nil {
+			return nil, fmt.Errorf("FillFromGit: %v", err)
+		}
+		stats.Code = code
+	}
 	return stats, nil
+}
+
+// GetActivityStatsTopAuthors returns top author stats for git commits for all branches
+func GetActivityStatsTopAuthors(repo *repo_model.Repository, timeFrom time.Time, count int) ([]*ActivityAuthorData, error) {
+	gitRepo, err := git.OpenRepository(repo.RepoPath())
+	if err != nil {
+		return nil, fmt.Errorf("OpenRepository: %v", err)
+	}
+	defer gitRepo.Close()
+
+	code, err := gitRepo.GetCodeActivityStats(timeFrom, "")
+	if err != nil {
+		return nil, fmt.Errorf("FillFromGit: %v", err)
+	}
+	if code.Authors == nil {
+		return nil, nil
+	}
+	users := make(map[int64]*ActivityAuthorData)
+	var unknownUserID int64
+	unknownUserAvatarLink := user_model.NewGhostUser().AvatarLink()
+	for _, v := range code.Authors {
+		if len(v.Email) == 0 {
+			continue
+		}
+		u, err := user_model.GetUserByEmail(v.Email)
+		if u == nil || user_model.IsErrUserNotExist(err) {
+			unknownUserID--
+			users[unknownUserID] = &ActivityAuthorData{
+				Name:       v.Name,
+				AvatarLink: unknownUserAvatarLink,
+				Commits:    v.Commits,
+			}
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if user, ok := users[u.ID]; !ok {
+			users[u.ID] = &ActivityAuthorData{
+				Name:       u.DisplayName(),
+				Login:      u.LowerName,
+				AvatarLink: u.AvatarLink(),
+				HomeLink:   u.HomeLink(),
+				Commits:    v.Commits,
+			}
+		} else {
+			user.Commits += v.Commits
+		}
+	}
+	v := make([]*ActivityAuthorData, 0)
+	for _, u := range users {
+		v = append(v, u)
+	}
+
+	sort.Slice(v, func(i, j int) bool {
+		return v[i].Commits > v[j].Commits
+	})
+
+	cnt := count
+	if cnt > len(v) {
+		cnt = len(v)
+	}
+
+	return v[:cnt], nil
 }
 
 // ActivePRCount returns total active pull request count
@@ -155,7 +248,7 @@ func (stats *ActivityStats) FillPullRequests(repoID int64, fromTime time.Time) e
 }
 
 func pullRequestsForActivityStatement(repoID int64, fromTime time.Time, merged bool) *xorm.Session {
-	sess := x.Where("pull_request.base_repo_id=?", repoID).
+	sess := db.GetEngine(db.DefaultContext).Where("pull_request.base_repo_id=?", repoID).
 		Join("INNER", "issue", "pull_request.issue_id = issue.id")
 
 	if merged {
@@ -176,7 +269,7 @@ func (stats *ActivityStats) FillIssues(repoID int64, fromTime time.Time) error {
 
 	// Closed issues
 	sess := issuesForActivityStatement(repoID, fromTime, true, false)
-	sess.OrderBy("issue.updated_unix DESC")
+	sess.OrderBy("issue.closed_unix DESC")
 	stats.ClosedIssues = make(IssueList, 0)
 	if err = sess.Find(&stats.ClosedIssues); err != nil {
 		return err
@@ -223,12 +316,16 @@ func (stats *ActivityStats) FillUnresolvedIssues(repoID int64, fromTime time.Tim
 }
 
 func issuesForActivityStatement(repoID int64, fromTime time.Time, closed, unresolved bool) *xorm.Session {
-	sess := x.Where("issue.repo_id = ?", repoID).
+	sess := db.GetEngine(db.DefaultContext).Where("issue.repo_id = ?", repoID).
 		And("issue.is_closed = ?", closed)
 
 	if !unresolved {
 		sess.And("issue.is_pull = ?", false)
-		sess.And("issue.created_unix >= ?", fromTime.Unix())
+		if closed {
+			sess.And("issue.closed_unix >= ?", fromTime.Unix())
+		} else {
+			sess.And("issue.created_unix >= ?", fromTime.Unix())
+		}
 	} else {
 		sess.And("issue.created_unix < ?", fromTime.Unix())
 		sess.And("issue.updated_unix >= ?", fromTime.Unix())
@@ -261,7 +358,7 @@ func (stats *ActivityStats) FillReleases(repoID int64, fromTime time.Time) error
 }
 
 func releasesForActivityStatement(repoID int64, fromTime time.Time) *xorm.Session {
-	return x.Where("release.repo_id = ?", repoID).
+	return db.GetEngine(db.DefaultContext).Where("release.repo_id = ?", repoID).
 		And("release.is_draft = ?", false).
 		And("release.created_unix >= ?", fromTime.Unix())
 }

@@ -1,109 +1,31 @@
 // Copyright 2015 The Gogs Authors. All rights reserved.
+// Copyright 2019 The Gitea Authors. All rights reserved.
 // Use of this source code is governed by a MIT-style
 // license that can be found in the LICENSE file.
 
 package models
 
-import "fmt"
+import (
+	"fmt"
 
-// ErrNameReserved represents a "reserved name" error.
-type ErrNameReserved struct {
-	Name string
+	"code.gitea.io/gitea/models/perm"
+	repo_model "code.gitea.io/gitea/models/repo"
+	"code.gitea.io/gitea/modules/git"
+)
+
+// ErrNotExist represents a non-exist error.
+type ErrNotExist struct {
+	ID int64
 }
 
-// IsErrNameReserved checks if an error is a ErrNameReserved.
-func IsErrNameReserved(err error) bool {
-	_, ok := err.(ErrNameReserved)
+// IsErrNotExist checks if an error is an ErrNotExist
+func IsErrNotExist(err error) bool {
+	_, ok := err.(ErrNotExist)
 	return ok
 }
 
-func (err ErrNameReserved) Error() string {
-	return fmt.Sprintf("name is reserved [name: %s]", err.Name)
-}
-
-// ErrNamePatternNotAllowed represents a "pattern not allowed" error.
-type ErrNamePatternNotAllowed struct {
-	Pattern string
-}
-
-// IsErrNamePatternNotAllowed checks if an error is an
-// ErrNamePatternNotAllowed.
-func IsErrNamePatternNotAllowed(err error) bool {
-	_, ok := err.(ErrNamePatternNotAllowed)
-	return ok
-}
-
-func (err ErrNamePatternNotAllowed) Error() string {
-	return fmt.Sprintf("name pattern is not allowed [pattern: %s]", err.Pattern)
-}
-
-//  ____ ___
-// |    |   \______ ___________
-// |    |   /  ___// __ \_  __ \
-// |    |  /\___ \\  ___/|  | \/
-// |______//____  >\___  >__|
-//              \/     \/
-
-// ErrUserAlreadyExist represents a "user already exists" error.
-type ErrUserAlreadyExist struct {
-	Name string
-}
-
-// IsErrUserAlreadyExist checks if an error is a ErrUserAlreadyExists.
-func IsErrUserAlreadyExist(err error) bool {
-	_, ok := err.(ErrUserAlreadyExist)
-	return ok
-}
-
-func (err ErrUserAlreadyExist) Error() string {
-	return fmt.Sprintf("user already exists [name: %s]", err.Name)
-}
-
-// ErrUserNotExist represents a "UserNotExist" kind of error.
-type ErrUserNotExist struct {
-	UID   int64
-	Name  string
-	KeyID int64
-}
-
-// IsErrUserNotExist checks if an error is a ErrUserNotExist.
-func IsErrUserNotExist(err error) bool {
-	_, ok := err.(ErrUserNotExist)
-	return ok
-}
-
-func (err ErrUserNotExist) Error() string {
-	return fmt.Sprintf("user does not exist [uid: %d, name: %s, keyid: %d]", err.UID, err.Name, err.KeyID)
-}
-
-// ErrEmailAlreadyUsed represents a "EmailAlreadyUsed" kind of error.
-type ErrEmailAlreadyUsed struct {
-	Email string
-}
-
-// IsErrEmailAlreadyUsed checks if an error is a ErrEmailAlreadyUsed.
-func IsErrEmailAlreadyUsed(err error) bool {
-	_, ok := err.(ErrEmailAlreadyUsed)
-	return ok
-}
-
-func (err ErrEmailAlreadyUsed) Error() string {
-	return fmt.Sprintf("e-mail has been used [email: %s]", err.Email)
-}
-
-// ErrOpenIDAlreadyUsed represents a "OpenIDAlreadyUsed" kind of error.
-type ErrOpenIDAlreadyUsed struct {
-	OpenID string
-}
-
-// IsErrOpenIDAlreadyUsed checks if an error is a ErrOpenIDAlreadyUsed.
-func IsErrOpenIDAlreadyUsed(err error) bool {
-	_, ok := err.(ErrOpenIDAlreadyUsed)
-	return ok
-}
-
-func (err ErrOpenIDAlreadyUsed) Error() string {
-	return fmt.Sprintf("OpenID has been used [oid: %s]", err.OpenID)
+func (err ErrNotExist) Error() string {
+	return fmt.Sprintf("record does not exist [id: %d]", err.ID)
 }
 
 // ErrUserOwnRepos represents a "UserOwnRepos" kind of error.
@@ -137,8 +59,7 @@ func (err ErrUserHasOrgs) Error() string {
 }
 
 // ErrUserNotAllowedCreateOrg represents a "UserNotAllowedCreateOrg" kind of error.
-type ErrUserNotAllowedCreateOrg struct {
-}
+type ErrUserNotAllowedCreateOrg struct{}
 
 // IsErrUserNotAllowedCreateOrg checks if an error is an ErrUserNotAllowedCreateOrg.
 func IsErrUserNotAllowedCreateOrg(err error) bool {
@@ -147,22 +68,7 @@ func IsErrUserNotAllowedCreateOrg(err error) bool {
 }
 
 func (err ErrUserNotAllowedCreateOrg) Error() string {
-	return fmt.Sprintf("user is not allowed to create organizations")
-}
-
-// ErrReachLimitOfRepo represents a "ReachLimitOfRepo" kind of error.
-type ErrReachLimitOfRepo struct {
-	Limit int
-}
-
-// IsErrReachLimitOfRepo checks if an error is a ErrReachLimitOfRepo.
-func IsErrReachLimitOfRepo(err error) bool {
-	_, ok := err.(ErrReachLimitOfRepo)
-	return ok
-}
-
-func (err ErrReachLimitOfRepo) Error() string {
-	return fmt.Sprintf("user has reached maximum limit of repositories [limit: %d]", err.Limit)
+	return "user is not allowed to create organizations"
 }
 
 //  __      __.__ __   .__
@@ -177,7 +83,7 @@ type ErrWikiAlreadyExist struct {
 	Title string
 }
 
-// IsErrWikiAlreadyExist checks if an error is a ErrWikiAlreadyExist.
+// IsErrWikiAlreadyExist checks if an error is an ErrWikiAlreadyExist.
 func IsErrWikiAlreadyExist(err error) bool {
 	_, ok := err.(ErrWikiAlreadyExist)
 	return ok
@@ -187,220 +93,34 @@ func (err ErrWikiAlreadyExist) Error() string {
 	return fmt.Sprintf("wiki page already exists [title: %s]", err.Title)
 }
 
-// __________     ___.   .__  .__          ____  __.
-// \______   \__ _\_ |__ |  | |__| ____   |    |/ _|____ ___.__.
-//  |     ___/  |  \ __ \|  | |  |/ ___\  |      <_/ __ <   |  |
-//  |    |   |  |  / \_\ \  |_|  \  \___  |    |  \  ___/\___  |
-//  |____|   |____/|___  /____/__|\___  > |____|__ \___  > ____|
-//                     \/             \/          \/   \/\/
-
-// ErrKeyUnableVerify represents a "KeyUnableVerify" kind of error.
-type ErrKeyUnableVerify struct {
-	Result string
+// ErrWikiReservedName represents a reserved name error.
+type ErrWikiReservedName struct {
+	Title string
 }
 
-// IsErrKeyUnableVerify checks if an error is a ErrKeyUnableVerify.
-func IsErrKeyUnableVerify(err error) bool {
-	_, ok := err.(ErrKeyUnableVerify)
+// IsErrWikiReservedName checks if an error is an ErrWikiReservedName.
+func IsErrWikiReservedName(err error) bool {
+	_, ok := err.(ErrWikiReservedName)
 	return ok
 }
 
-func (err ErrKeyUnableVerify) Error() string {
-	return fmt.Sprintf("Unable to verify key content [result: %s]", err.Result)
+func (err ErrWikiReservedName) Error() string {
+	return fmt.Sprintf("wiki title is reserved: %s", err.Title)
 }
 
-// ErrKeyNotExist represents a "KeyNotExist" kind of error.
-type ErrKeyNotExist struct {
-	ID int64
+// ErrWikiInvalidFileName represents an invalid wiki file name.
+type ErrWikiInvalidFileName struct {
+	FileName string
 }
 
-// IsErrKeyNotExist checks if an error is a ErrKeyNotExist.
-func IsErrKeyNotExist(err error) bool {
-	_, ok := err.(ErrKeyNotExist)
+// IsErrWikiInvalidFileName checks if an error is an ErrWikiInvalidFileName.
+func IsErrWikiInvalidFileName(err error) bool {
+	_, ok := err.(ErrWikiInvalidFileName)
 	return ok
 }
 
-func (err ErrKeyNotExist) Error() string {
-	return fmt.Sprintf("public key does not exist [id: %d]", err.ID)
-}
-
-// ErrKeyAlreadyExist represents a "KeyAlreadyExist" kind of error.
-type ErrKeyAlreadyExist struct {
-	OwnerID     int64
-	Fingerprint string
-	Content     string
-}
-
-// IsErrKeyAlreadyExist checks if an error is a ErrKeyAlreadyExist.
-func IsErrKeyAlreadyExist(err error) bool {
-	_, ok := err.(ErrKeyAlreadyExist)
-	return ok
-}
-
-func (err ErrKeyAlreadyExist) Error() string {
-	return fmt.Sprintf("public key already exists [owner_id: %d, finter_print: %s, content: %s]",
-		err.OwnerID, err.Fingerprint, err.Content)
-}
-
-// ErrKeyNameAlreadyUsed represents a "KeyNameAlreadyUsed" kind of error.
-type ErrKeyNameAlreadyUsed struct {
-	OwnerID int64
-	Name    string
-}
-
-// IsErrKeyNameAlreadyUsed checks if an error is a ErrKeyNameAlreadyUsed.
-func IsErrKeyNameAlreadyUsed(err error) bool {
-	_, ok := err.(ErrKeyNameAlreadyUsed)
-	return ok
-}
-
-func (err ErrKeyNameAlreadyUsed) Error() string {
-	return fmt.Sprintf("public key already exists [owner_id: %d, name: %s]", err.OwnerID, err.Name)
-}
-
-// ErrGPGNoEmailFound represents a "ErrGPGNoEmailFound" kind of error.
-type ErrGPGNoEmailFound struct {
-	FailedEmails []string
-}
-
-// IsErrGPGNoEmailFound checks if an error is a ErrGPGNoEmailFound.
-func IsErrGPGNoEmailFound(err error) bool {
-	_, ok := err.(ErrGPGNoEmailFound)
-	return ok
-}
-
-func (err ErrGPGNoEmailFound) Error() string {
-	return fmt.Sprintf("none of the emails attached to the GPG key could be found: %v", err.FailedEmails)
-}
-
-// ErrGPGKeyParsing represents a "ErrGPGKeyParsing" kind of error.
-type ErrGPGKeyParsing struct {
-	ParseError error
-}
-
-// IsErrGPGKeyParsing checks if an error is a ErrGPGKeyParsing.
-func IsErrGPGKeyParsing(err error) bool {
-	_, ok := err.(ErrGPGKeyParsing)
-	return ok
-}
-
-func (err ErrGPGKeyParsing) Error() string {
-	return fmt.Sprintf("failed to parse gpg key %s", err.ParseError.Error())
-}
-
-// ErrGPGKeyNotExist represents a "GPGKeyNotExist" kind of error.
-type ErrGPGKeyNotExist struct {
-	ID int64
-}
-
-// IsErrGPGKeyNotExist checks if an error is a ErrGPGKeyNotExist.
-func IsErrGPGKeyNotExist(err error) bool {
-	_, ok := err.(ErrGPGKeyNotExist)
-	return ok
-}
-
-func (err ErrGPGKeyNotExist) Error() string {
-	return fmt.Sprintf("public gpg key does not exist [id: %d]", err.ID)
-}
-
-// ErrGPGKeyIDAlreadyUsed represents a "GPGKeyIDAlreadyUsed" kind of error.
-type ErrGPGKeyIDAlreadyUsed struct {
-	KeyID string
-}
-
-// IsErrGPGKeyIDAlreadyUsed checks if an error is a ErrKeyNameAlreadyUsed.
-func IsErrGPGKeyIDAlreadyUsed(err error) bool {
-	_, ok := err.(ErrGPGKeyIDAlreadyUsed)
-	return ok
-}
-
-func (err ErrGPGKeyIDAlreadyUsed) Error() string {
-	return fmt.Sprintf("public key already exists [key_id: %s]", err.KeyID)
-}
-
-// ErrGPGKeyAccessDenied represents a "GPGKeyAccessDenied" kind of Error.
-type ErrGPGKeyAccessDenied struct {
-	UserID int64
-	KeyID  int64
-}
-
-// IsErrGPGKeyAccessDenied checks if an error is a ErrGPGKeyAccessDenied.
-func IsErrGPGKeyAccessDenied(err error) bool {
-	_, ok := err.(ErrGPGKeyAccessDenied)
-	return ok
-}
-
-// Error pretty-prints an error of type ErrGPGKeyAccessDenied.
-func (err ErrGPGKeyAccessDenied) Error() string {
-	return fmt.Sprintf("user does not have access to the key [user_id: %d, key_id: %d]",
-		err.UserID, err.KeyID)
-}
-
-// ErrKeyAccessDenied represents a "KeyAccessDenied" kind of error.
-type ErrKeyAccessDenied struct {
-	UserID int64
-	KeyID  int64
-	Note   string
-}
-
-// IsErrKeyAccessDenied checks if an error is a ErrKeyAccessDenied.
-func IsErrKeyAccessDenied(err error) bool {
-	_, ok := err.(ErrKeyAccessDenied)
-	return ok
-}
-
-func (err ErrKeyAccessDenied) Error() string {
-	return fmt.Sprintf("user does not have access to the key [user_id: %d, key_id: %d, note: %s]",
-		err.UserID, err.KeyID, err.Note)
-}
-
-// ErrDeployKeyNotExist represents a "DeployKeyNotExist" kind of error.
-type ErrDeployKeyNotExist struct {
-	ID     int64
-	KeyID  int64
-	RepoID int64
-}
-
-// IsErrDeployKeyNotExist checks if an error is a ErrDeployKeyNotExist.
-func IsErrDeployKeyNotExist(err error) bool {
-	_, ok := err.(ErrDeployKeyNotExist)
-	return ok
-}
-
-func (err ErrDeployKeyNotExist) Error() string {
-	return fmt.Sprintf("Deploy key does not exist [id: %d, key_id: %d, repo_id: %d]", err.ID, err.KeyID, err.RepoID)
-}
-
-// ErrDeployKeyAlreadyExist represents a "DeployKeyAlreadyExist" kind of error.
-type ErrDeployKeyAlreadyExist struct {
-	KeyID  int64
-	RepoID int64
-}
-
-// IsErrDeployKeyAlreadyExist checks if an error is a ErrDeployKeyAlreadyExist.
-func IsErrDeployKeyAlreadyExist(err error) bool {
-	_, ok := err.(ErrDeployKeyAlreadyExist)
-	return ok
-}
-
-func (err ErrDeployKeyAlreadyExist) Error() string {
-	return fmt.Sprintf("public key already exists [key_id: %d, repo_id: %d]", err.KeyID, err.RepoID)
-}
-
-// ErrDeployKeyNameAlreadyUsed represents a "DeployKeyNameAlreadyUsed" kind of error.
-type ErrDeployKeyNameAlreadyUsed struct {
-	RepoID int64
-	Name   string
-}
-
-// IsErrDeployKeyNameAlreadyUsed checks if an error is a ErrDeployKeyNameAlreadyUsed.
-func IsErrDeployKeyNameAlreadyUsed(err error) bool {
-	_, ok := err.(ErrDeployKeyNameAlreadyUsed)
-	return ok
-}
-
-func (err ErrDeployKeyNameAlreadyUsed) Error() string {
-	return fmt.Sprintf("public key already exists [repo_id: %d, name: %s]", err.RepoID, err.Name)
+func (err ErrWikiInvalidFileName) Error() string {
+	return fmt.Sprintf("Invalid wiki filename: %s", err.FileName)
 }
 
 //    _____                                   ___________     __
@@ -412,7 +132,7 @@ func (err ErrDeployKeyNameAlreadyUsed) Error() string {
 
 // ErrAccessTokenNotExist represents a "AccessTokenNotExist" kind of error.
 type ErrAccessTokenNotExist struct {
-	SHA string
+	Token string
 }
 
 // IsErrAccessTokenNotExist checks if an error is a ErrAccessTokenNotExist.
@@ -422,12 +142,11 @@ func IsErrAccessTokenNotExist(err error) bool {
 }
 
 func (err ErrAccessTokenNotExist) Error() string {
-	return fmt.Sprintf("access token does not exist [sha: %s]", err.SHA)
+	return fmt.Sprintf("access token does not exist [sha: %s]", err.Token)
 }
 
 // ErrAccessTokenEmpty represents a "AccessTokenEmpty" kind of error.
-type ErrAccessTokenEmpty struct {
-}
+type ErrAccessTokenEmpty struct{}
 
 // IsErrAccessTokenEmpty checks if an error is a ErrAccessTokenEmpty.
 func IsErrAccessTokenEmpty(err error) bool {
@@ -436,7 +155,7 @@ func IsErrAccessTokenEmpty(err error) bool {
 }
 
 func (err ErrAccessTokenEmpty) Error() string {
-	return fmt.Sprintf("access token is empty")
+	return "access token is empty"
 }
 
 // ________                            .__                __  .__
@@ -477,78 +196,165 @@ func (err ErrLastOrgOwner) Error() string {
 	return fmt.Sprintf("user is the last member of owner team [uid: %d]", err.UID)
 }
 
-// __________                           .__  __
-// \______   \ ____ ______   ____  _____|__|/  |_  ___________ ___.__.
-//  |       _// __ \\____ \ /  _ \/  ___/  \   __\/  _ \_  __ <   |  |
-//  |    |   \  ___/|  |_> >  <_> )___ \|  ||  | (  <_> )  | \/\___  |
-//  |____|_  /\___  >   __/ \____/____  >__||__|  \____/|__|   / ____|
-//         \/     \/|__|              \/                       \/
+//.____   ____________________
+//|    |  \_   _____/   _____/
+//|    |   |    __) \_____  \
+//|    |___|     \  /        \
+//|_______ \___  / /_______  /
+//        \/   \/          \/
 
-// ErrRepoNotExist represents a "RepoNotExist" kind of error.
-type ErrRepoNotExist struct {
-	ID   int64
-	UID  int64
-	Name string
+// ErrLFSLockNotExist represents a "LFSLockNotExist" kind of error.
+type ErrLFSLockNotExist struct {
+	ID     int64
+	RepoID int64
+	Path   string
 }
 
-// IsErrRepoNotExist checks if an error is a ErrRepoNotExist.
-func IsErrRepoNotExist(err error) bool {
-	_, ok := err.(ErrRepoNotExist)
+// IsErrLFSLockNotExist checks if an error is a ErrLFSLockNotExist.
+func IsErrLFSLockNotExist(err error) bool {
+	_, ok := err.(ErrLFSLockNotExist)
 	return ok
 }
 
-func (err ErrRepoNotExist) Error() string {
-	return fmt.Sprintf("repository does not exist [id: %d, uid: %d, name: %s]", err.ID, err.UID, err.Name)
+func (err ErrLFSLockNotExist) Error() string {
+	return fmt.Sprintf("lfs lock does not exist [id: %d, rid: %d, path: %s]", err.ID, err.RepoID, err.Path)
 }
 
-// ErrRepoAlreadyExist represents a "RepoAlreadyExist" kind of error.
-type ErrRepoAlreadyExist struct {
+// ErrLFSUnauthorizedAction represents a "LFSUnauthorizedAction" kind of error.
+type ErrLFSUnauthorizedAction struct {
+	RepoID   int64
+	UserName string
+	Mode     perm.AccessMode
+}
+
+// IsErrLFSUnauthorizedAction checks if an error is a ErrLFSUnauthorizedAction.
+func IsErrLFSUnauthorizedAction(err error) bool {
+	_, ok := err.(ErrLFSUnauthorizedAction)
+	return ok
+}
+
+func (err ErrLFSUnauthorizedAction) Error() string {
+	if err.Mode == perm.AccessModeWrite {
+		return fmt.Sprintf("User %s doesn't have write access for lfs lock [rid: %d]", err.UserName, err.RepoID)
+	}
+	return fmt.Sprintf("User %s doesn't have read access for lfs lock [rid: %d]", err.UserName, err.RepoID)
+}
+
+// ErrLFSLockAlreadyExist represents a "LFSLockAlreadyExist" kind of error.
+type ErrLFSLockAlreadyExist struct {
+	RepoID int64
+	Path   string
+}
+
+// IsErrLFSLockAlreadyExist checks if an error is a ErrLFSLockAlreadyExist.
+func IsErrLFSLockAlreadyExist(err error) bool {
+	_, ok := err.(ErrLFSLockAlreadyExist)
+	return ok
+}
+
+func (err ErrLFSLockAlreadyExist) Error() string {
+	return fmt.Sprintf("lfs lock already exists [rid: %d, path: %s]", err.RepoID, err.Path)
+}
+
+// ErrLFSFileLocked represents a "LFSFileLocked" kind of error.
+type ErrLFSFileLocked struct {
+	RepoID   int64
+	Path     string
+	UserName string
+}
+
+// IsErrLFSFileLocked checks if an error is a ErrLFSFileLocked.
+func IsErrLFSFileLocked(err error) bool {
+	_, ok := err.(ErrLFSFileLocked)
+	return ok
+}
+
+func (err ErrLFSFileLocked) Error() string {
+	return fmt.Sprintf("File is lfs locked [repo: %d, locked by: %s, path: %s]", err.RepoID, err.UserName, err.Path)
+}
+
+// ErrNoPendingRepoTransfer is an error type for repositories without a pending
+// transfer request
+type ErrNoPendingRepoTransfer struct {
+	RepoID int64
+}
+
+func (e ErrNoPendingRepoTransfer) Error() string {
+	return fmt.Sprintf("repository doesn't have a pending transfer [repo_id: %d]", e.RepoID)
+}
+
+// IsErrNoPendingTransfer is an error type when a repository has no pending
+// transfers
+func IsErrNoPendingTransfer(err error) bool {
+	_, ok := err.(ErrNoPendingRepoTransfer)
+	return ok
+}
+
+// ErrRepoTransferInProgress represents the state of a repository that has an
+// ongoing transfer
+type ErrRepoTransferInProgress struct {
 	Uname string
 	Name  string
 }
 
-// IsErrRepoAlreadyExist checks if an error is a ErrRepoAlreadyExist.
-func IsErrRepoAlreadyExist(err error) bool {
-	_, ok := err.(ErrRepoAlreadyExist)
+// IsErrRepoTransferInProgress checks if an error is a ErrRepoTransferInProgress.
+func IsErrRepoTransferInProgress(err error) bool {
+	_, ok := err.(ErrRepoTransferInProgress)
 	return ok
 }
 
-func (err ErrRepoAlreadyExist) Error() string {
-	return fmt.Sprintf("repository already exists [uname: %s, name: %s]", err.Uname, err.Name)
+func (err ErrRepoTransferInProgress) Error() string {
+	return fmt.Sprintf("repository is already being transferred [uname: %s, name: %s]", err.Uname, err.Name)
 }
 
-// ErrRepoRedirectNotExist represents a "RepoRedirectNotExist" kind of error.
-type ErrRepoRedirectNotExist struct {
-	OwnerID  int64
+// ErrForkAlreadyExist represents a "ForkAlreadyExist" kind of error.
+type ErrForkAlreadyExist struct {
+	Uname    string
 	RepoName string
+	ForkName string
 }
 
-// IsErrRepoRedirectNotExist check if an error is an ErrRepoRedirectNotExist
-func IsErrRepoRedirectNotExist(err error) bool {
-	_, ok := err.(ErrRepoRedirectNotExist)
+// IsErrForkAlreadyExist checks if an error is an ErrForkAlreadyExist.
+func IsErrForkAlreadyExist(err error) bool {
+	_, ok := err.(ErrForkAlreadyExist)
 	return ok
 }
 
-func (err ErrRepoRedirectNotExist) Error() string {
-	return fmt.Sprintf("repository redirect does not exist [uid: %d, name: %s]", err.OwnerID, err.RepoName)
+func (err ErrForkAlreadyExist) Error() string {
+	return fmt.Sprintf("repository is already forked by user [uname: %s, repo path: %s, fork path: %s]", err.Uname, err.RepoName, err.ForkName)
 }
 
 // ErrInvalidCloneAddr represents a "InvalidCloneAddr" kind of error.
 type ErrInvalidCloneAddr struct {
+	Host               string
 	IsURLError         bool
 	IsInvalidPath      bool
+	IsProtocolInvalid  bool
 	IsPermissionDenied bool
+	LocalPath          bool
 }
 
 // IsErrInvalidCloneAddr checks if an error is a ErrInvalidCloneAddr.
 func IsErrInvalidCloneAddr(err error) bool {
-	_, ok := err.(ErrInvalidCloneAddr)
+	_, ok := err.(*ErrInvalidCloneAddr)
 	return ok
 }
 
-func (err ErrInvalidCloneAddr) Error() string {
-	return fmt.Sprintf("invalid clone address [is_url_error: %v, is_invalid_path: %v, is_permission_denied: %v]",
-		err.IsURLError, err.IsInvalidPath, err.IsPermissionDenied)
+func (err *ErrInvalidCloneAddr) Error() string {
+	if err.IsInvalidPath {
+		return fmt.Sprintf("migration/cloning from '%s' is not allowed: the provided path is invalid", err.Host)
+	}
+	if err.IsProtocolInvalid {
+		return fmt.Sprintf("migration/cloning from '%s' is not allowed: the provided url protocol is not allowed", err.Host)
+	}
+	if err.IsPermissionDenied {
+		return fmt.Sprintf("migration/cloning from '%s' is not allowed.", err.Host)
+	}
+	if err.IsURLError {
+		return fmt.Sprintf("migration/cloning from '%s' is not allowed: the provided url is invalid", err.Host)
+	}
+
+	return fmt.Sprintf("migration/cloning from '%s' is not allowed", err.Host)
 }
 
 // ErrUpdateTaskNotExist represents a "UpdateTaskNotExist" kind of error.
@@ -612,19 +418,136 @@ func (err ErrInvalidTagName) Error() string {
 	return fmt.Sprintf("release tag name is not valid [tag_name: %s]", err.TagName)
 }
 
-// ErrRepoFileAlreadyExist represents a "RepoFileAlreadyExist" kind of error.
-type ErrRepoFileAlreadyExist struct {
-	FileName string
+// ErrProtectedTagName represents a "ProtectedTagName" kind of error.
+type ErrProtectedTagName struct {
+	TagName string
 }
 
-// IsErrRepoFileAlreadyExist checks if an error is a ErrRepoFileAlreadyExist.
-func IsErrRepoFileAlreadyExist(err error) bool {
-	_, ok := err.(ErrRepoFileAlreadyExist)
+// IsErrProtectedTagName checks if an error is a ErrProtectedTagName.
+func IsErrProtectedTagName(err error) bool {
+	_, ok := err.(ErrProtectedTagName)
 	return ok
 }
 
-func (err ErrRepoFileAlreadyExist) Error() string {
-	return fmt.Sprintf("repository file already exists [file_name: %s]", err.FileName)
+func (err ErrProtectedTagName) Error() string {
+	return fmt.Sprintf("release tag name is protected [tag_name: %s]", err.TagName)
+}
+
+// ErrRepoFileAlreadyExists represents a "RepoFileAlreadyExist" kind of error.
+type ErrRepoFileAlreadyExists struct {
+	Path string
+}
+
+// IsErrRepoFileAlreadyExists checks if an error is a ErrRepoFileAlreadyExists.
+func IsErrRepoFileAlreadyExists(err error) bool {
+	_, ok := err.(ErrRepoFileAlreadyExists)
+	return ok
+}
+
+func (err ErrRepoFileAlreadyExists) Error() string {
+	return fmt.Sprintf("repository file already exists [path: %s]", err.Path)
+}
+
+// ErrRepoFileDoesNotExist represents a "RepoFileDoesNotExist" kind of error.
+type ErrRepoFileDoesNotExist struct {
+	Path string
+	Name string
+}
+
+// IsErrRepoFileDoesNotExist checks if an error is a ErrRepoDoesNotExist.
+func IsErrRepoFileDoesNotExist(err error) bool {
+	_, ok := err.(ErrRepoFileDoesNotExist)
+	return ok
+}
+
+func (err ErrRepoFileDoesNotExist) Error() string {
+	return fmt.Sprintf("repository file does not exist [path: %s]", err.Path)
+}
+
+// ErrFilenameInvalid represents a "FilenameInvalid" kind of error.
+type ErrFilenameInvalid struct {
+	Path string
+}
+
+// IsErrFilenameInvalid checks if an error is an ErrFilenameInvalid.
+func IsErrFilenameInvalid(err error) bool {
+	_, ok := err.(ErrFilenameInvalid)
+	return ok
+}
+
+func (err ErrFilenameInvalid) Error() string {
+	return fmt.Sprintf("path contains a malformed path component [path: %s]", err.Path)
+}
+
+// ErrUserCannotCommit represents "UserCannotCommit" kind of error.
+type ErrUserCannotCommit struct {
+	UserName string
+}
+
+// IsErrUserCannotCommit checks if an error is an ErrUserCannotCommit.
+func IsErrUserCannotCommit(err error) bool {
+	_, ok := err.(ErrUserCannotCommit)
+	return ok
+}
+
+func (err ErrUserCannotCommit) Error() string {
+	return fmt.Sprintf("user cannot commit to repo [user: %s]", err.UserName)
+}
+
+// ErrFilePathInvalid represents a "FilePathInvalid" kind of error.
+type ErrFilePathInvalid struct {
+	Message string
+	Path    string
+	Name    string
+	Type    git.EntryMode
+}
+
+// IsErrFilePathInvalid checks if an error is an ErrFilePathInvalid.
+func IsErrFilePathInvalid(err error) bool {
+	_, ok := err.(ErrFilePathInvalid)
+	return ok
+}
+
+func (err ErrFilePathInvalid) Error() string {
+	if err.Message != "" {
+		return err.Message
+	}
+	return fmt.Sprintf("path is invalid [path: %s]", err.Path)
+}
+
+// ErrFilePathProtected represents a "FilePathProtected" kind of error.
+type ErrFilePathProtected struct {
+	Message string
+	Path    string
+}
+
+// IsErrFilePathProtected checks if an error is an ErrFilePathProtected.
+func IsErrFilePathProtected(err error) bool {
+	_, ok := err.(ErrFilePathProtected)
+	return ok
+}
+
+func (err ErrFilePathProtected) Error() string {
+	if err.Message != "" {
+		return err.Message
+	}
+	return fmt.Sprintf("path is protected and can not be changed [path: %s]", err.Path)
+}
+
+// ErrUserDoesNotHaveAccessToRepo represets an error where the user doesn't has access to a given repo.
+type ErrUserDoesNotHaveAccessToRepo struct {
+	UserID   int64
+	RepoName string
+}
+
+// IsErrUserDoesNotHaveAccessToRepo checks if an error is a ErrRepoFileAlreadyExists.
+func IsErrUserDoesNotHaveAccessToRepo(err error) bool {
+	_, ok := err.(ErrUserDoesNotHaveAccessToRepo)
+	return ok
+}
+
+func (err ErrUserDoesNotHaveAccessToRepo) Error() string {
+	return fmt.Sprintf("user doesn't have access to repo [user_id: %d, repo_name: %s]", err.UserID, err.RepoName)
 }
 
 // __________                             .__
@@ -634,22 +557,22 @@ func (err ErrRepoFileAlreadyExist) Error() string {
 //  |______  / |__|  (____  /___|  /\___  >___|  /
 //         \/             \/     \/     \/     \/
 
-// ErrBranchNotExist represents a "BranchNotExist" kind of error.
-type ErrBranchNotExist struct {
-	Name string
+// ErrBranchDoesNotExist represents an error that branch with such name does not exist.
+type ErrBranchDoesNotExist struct {
+	BranchName string
 }
 
-// IsErrBranchNotExist checks if an error is a ErrBranchNotExist.
-func IsErrBranchNotExist(err error) bool {
-	_, ok := err.(ErrBranchNotExist)
+// IsErrBranchDoesNotExist checks if an error is an ErrBranchDoesNotExist.
+func IsErrBranchDoesNotExist(err error) bool {
+	_, ok := err.(ErrBranchDoesNotExist)
 	return ok
 }
 
-func (err ErrBranchNotExist) Error() string {
-	return fmt.Sprintf("branch does not exist [name: %s]", err.Name)
+func (err ErrBranchDoesNotExist) Error() string {
+	return fmt.Sprintf("branch does not exist [name: %s]", err.BranchName)
 }
 
-// ErrBranchAlreadyExists represents an error that branch with such name already exists
+// ErrBranchAlreadyExists represents an error that branch with such name already exists.
 type ErrBranchAlreadyExists struct {
 	BranchName string
 }
@@ -664,7 +587,7 @@ func (err ErrBranchAlreadyExists) Error() string {
 	return fmt.Sprintf("branch already exists [name: %s]", err.BranchName)
 }
 
-// ErrBranchNameConflict represents an error that branch name conflicts with other branch
+// ErrBranchNameConflict represents an error that branch name conflicts with other branch.
 type ErrBranchNameConflict struct {
 	BranchName string
 }
@@ -679,7 +602,38 @@ func (err ErrBranchNameConflict) Error() string {
 	return fmt.Sprintf("branch conflicts with existing branch [name: %s]", err.BranchName)
 }
 
-// ErrTagAlreadyExists represents an error that tag with such name already exists
+// ErrBranchesEqual represents an error that branch name conflicts with other branch.
+type ErrBranchesEqual struct {
+	BaseBranchName string
+	HeadBranchName string
+}
+
+// IsErrBranchesEqual checks if an error is an ErrBranchesEqual.
+func IsErrBranchesEqual(err error) bool {
+	_, ok := err.(ErrBranchesEqual)
+	return ok
+}
+
+func (err ErrBranchesEqual) Error() string {
+	return fmt.Sprintf("branches are equal [head: %sm base: %s]", err.HeadBranchName, err.BaseBranchName)
+}
+
+// ErrNotAllowedToMerge represents an error that a branch is protected and the current user is not allowed to modify it.
+type ErrNotAllowedToMerge struct {
+	Reason string
+}
+
+// IsErrNotAllowedToMerge checks if an error is an ErrNotAllowedToMerge.
+func IsErrNotAllowedToMerge(err error) bool {
+	_, ok := err.(ErrNotAllowedToMerge)
+	return ok
+}
+
+func (err ErrNotAllowedToMerge) Error() string {
+	return fmt.Sprintf("not allowed to merge [reason: %s]", err.Reason)
+}
+
+// ErrTagAlreadyExists represents an error that tag with such name already exists.
 type ErrTagAlreadyExists struct {
 	TagName string
 }
@@ -694,26 +648,65 @@ func (err ErrTagAlreadyExists) Error() string {
 	return fmt.Sprintf("tag already exists [name: %s]", err.TagName)
 }
 
-//  __      __      ___.   .__                   __
-// /  \    /  \ ____\_ |__ |  |__   ____   ____ |  | __
-// \   \/\/   // __ \| __ \|  |  \ /  _ \ /  _ \|  |/ /
-//  \        /\  ___/| \_\ \   Y  (  <_> |  <_> )    <
-//   \__/\  /  \___  >___  /___|  /\____/ \____/|__|_ \
-//        \/       \/    \/     \/                   \/
-
-// ErrWebhookNotExist represents a "WebhookNotExist" kind of error.
-type ErrWebhookNotExist struct {
-	ID int64
+// ErrSHADoesNotMatch represents a "SHADoesNotMatch" kind of error.
+type ErrSHADoesNotMatch struct {
+	Path       string
+	GivenSHA   string
+	CurrentSHA string
 }
 
-// IsErrWebhookNotExist checks if an error is a ErrWebhookNotExist.
-func IsErrWebhookNotExist(err error) bool {
-	_, ok := err.(ErrWebhookNotExist)
+// IsErrSHADoesNotMatch checks if an error is a ErrSHADoesNotMatch.
+func IsErrSHADoesNotMatch(err error) bool {
+	_, ok := err.(ErrSHADoesNotMatch)
 	return ok
 }
 
-func (err ErrWebhookNotExist) Error() string {
-	return fmt.Sprintf("webhook does not exist [id: %d]", err.ID)
+func (err ErrSHADoesNotMatch) Error() string {
+	return fmt.Sprintf("sha does not match [given: %s, expected: %s]", err.GivenSHA, err.CurrentSHA)
+}
+
+// ErrSHANotFound represents a "SHADoesNotMatch" kind of error.
+type ErrSHANotFound struct {
+	SHA string
+}
+
+// IsErrSHANotFound checks if an error is a ErrSHANotFound.
+func IsErrSHANotFound(err error) bool {
+	_, ok := err.(ErrSHANotFound)
+	return ok
+}
+
+func (err ErrSHANotFound) Error() string {
+	return fmt.Sprintf("sha not found [%s]", err.SHA)
+}
+
+// ErrCommitIDDoesNotMatch represents a "CommitIDDoesNotMatch" kind of error.
+type ErrCommitIDDoesNotMatch struct {
+	GivenCommitID   string
+	CurrentCommitID string
+}
+
+// IsErrCommitIDDoesNotMatch checks if an error is a ErrCommitIDDoesNotMatch.
+func IsErrCommitIDDoesNotMatch(err error) bool {
+	_, ok := err.(ErrCommitIDDoesNotMatch)
+	return ok
+}
+
+func (err ErrCommitIDDoesNotMatch) Error() string {
+	return fmt.Sprintf("file CommitID does not match [given: %s, expected: %s]", err.GivenCommitID, err.CurrentCommitID)
+}
+
+// ErrSHAOrCommitIDNotProvided represents a "SHAOrCommitIDNotProvided" kind of error.
+type ErrSHAOrCommitIDNotProvided struct{}
+
+// IsErrSHAOrCommitIDNotProvided checks if an error is a ErrSHAOrCommitIDNotProvided.
+func IsErrSHAOrCommitIDNotProvided(err error) bool {
+	_, ok := err.(ErrSHAOrCommitIDNotProvided)
+	return ok
+}
+
+func (err ErrSHAOrCommitIDNotProvided) Error() string {
+	return "a SHA or commit ID must be proved when updating a file"
 }
 
 // .___
@@ -738,6 +731,116 @@ func IsErrIssueNotExist(err error) bool {
 
 func (err ErrIssueNotExist) Error() string {
 	return fmt.Sprintf("issue does not exist [id: %d, repo_id: %d, index: %d]", err.ID, err.RepoID, err.Index)
+}
+
+// ErrIssueIsClosed represents a "IssueIsClosed" kind of error.
+type ErrIssueIsClosed struct {
+	ID     int64
+	RepoID int64
+	Index  int64
+}
+
+// IsErrIssueIsClosed checks if an error is a ErrIssueNotExist.
+func IsErrIssueIsClosed(err error) bool {
+	_, ok := err.(ErrIssueIsClosed)
+	return ok
+}
+
+func (err ErrIssueIsClosed) Error() string {
+	return fmt.Sprintf("issue is closed [id: %d, repo_id: %d, index: %d]", err.ID, err.RepoID, err.Index)
+}
+
+// ErrIssueLabelTemplateLoad represents a "ErrIssueLabelTemplateLoad" kind of error.
+type ErrIssueLabelTemplateLoad struct {
+	TemplateFile  string
+	OriginalError error
+}
+
+// IsErrIssueLabelTemplateLoad checks if an error is a ErrIssueLabelTemplateLoad.
+func IsErrIssueLabelTemplateLoad(err error) bool {
+	_, ok := err.(ErrIssueLabelTemplateLoad)
+	return ok
+}
+
+func (err ErrIssueLabelTemplateLoad) Error() string {
+	return fmt.Sprintf("Failed to load label template file '%s': %v", err.TemplateFile, err.OriginalError)
+}
+
+// ErrNewIssueInsert is used when the INSERT statement in newIssue fails
+type ErrNewIssueInsert struct {
+	OriginalError error
+}
+
+// IsErrNewIssueInsert checks if an error is a ErrNewIssueInsert.
+func IsErrNewIssueInsert(err error) bool {
+	_, ok := err.(ErrNewIssueInsert)
+	return ok
+}
+
+func (err ErrNewIssueInsert) Error() string {
+	return err.OriginalError.Error()
+}
+
+// ErrIssueWasClosed is used when close a closed issue
+type ErrIssueWasClosed struct {
+	ID    int64
+	Index int64
+}
+
+// IsErrIssueWasClosed checks if an error is a ErrIssueWasClosed.
+func IsErrIssueWasClosed(err error) bool {
+	_, ok := err.(ErrIssueWasClosed)
+	return ok
+}
+
+func (err ErrIssueWasClosed) Error() string {
+	return fmt.Sprintf("Issue [%d] %d was already closed", err.ID, err.Index)
+}
+
+// ErrPullWasClosed is used close a closed pull request
+type ErrPullWasClosed struct {
+	ID    int64
+	Index int64
+}
+
+// IsErrPullWasClosed checks if an error is a ErrErrPullWasClosed.
+func IsErrPullWasClosed(err error) bool {
+	_, ok := err.(ErrPullWasClosed)
+	return ok
+}
+
+func (err ErrPullWasClosed) Error() string {
+	return fmt.Sprintf("Pull request [%d] %d was already closed", err.ID, err.Index)
+}
+
+// ErrForbiddenIssueReaction is used when a forbidden reaction was try to created
+type ErrForbiddenIssueReaction struct {
+	Reaction string
+}
+
+// IsErrForbiddenIssueReaction checks if an error is a ErrForbiddenIssueReaction.
+func IsErrForbiddenIssueReaction(err error) bool {
+	_, ok := err.(ErrForbiddenIssueReaction)
+	return ok
+}
+
+func (err ErrForbiddenIssueReaction) Error() string {
+	return fmt.Sprintf("'%s' is not an allowed reaction", err.Reaction)
+}
+
+// ErrReactionAlreadyExist is used when a existing reaction was try to created
+type ErrReactionAlreadyExist struct {
+	Reaction string
+}
+
+// IsErrReactionAlreadyExist checks if an error is a ErrReactionAlreadyExist.
+func IsErrReactionAlreadyExist(err error) bool {
+	_, ok := err.(ErrReactionAlreadyExist)
+	return ok
+}
+
+func (err ErrReactionAlreadyExist) Error() string {
+	return fmt.Sprintf("reaction '%s' already exists", err.Reaction)
 }
 
 // __________      .__  .__ __________                                     __
@@ -787,6 +890,118 @@ func IsErrPullRequestAlreadyExists(err error) bool {
 // Error does pretty-printing :D
 func (err ErrPullRequestAlreadyExists) Error() string {
 	return fmt.Sprintf("pull request already exists for these targets [id: %d, issue_id: %d, head_repo_id: %d, base_repo_id: %d, head_branch: %s, base_branch: %s]",
+		err.ID, err.IssueID, err.HeadRepoID, err.BaseRepoID, err.HeadBranch, err.BaseBranch)
+}
+
+// ErrPullRequestHeadRepoMissing represents a "ErrPullRequestHeadRepoMissing" error
+type ErrPullRequestHeadRepoMissing struct {
+	ID         int64
+	HeadRepoID int64
+}
+
+// IsErrErrPullRequestHeadRepoMissing checks if an error is a ErrPullRequestHeadRepoMissing.
+func IsErrErrPullRequestHeadRepoMissing(err error) bool {
+	_, ok := err.(ErrPullRequestHeadRepoMissing)
+	return ok
+}
+
+// Error does pretty-printing :D
+func (err ErrPullRequestHeadRepoMissing) Error() string {
+	return fmt.Sprintf("pull request head repo missing [id: %d, head_repo_id: %d]",
+		err.ID, err.HeadRepoID)
+}
+
+// ErrInvalidMergeStyle represents an error if merging with disabled merge strategy
+type ErrInvalidMergeStyle struct {
+	ID    int64
+	Style repo_model.MergeStyle
+}
+
+// IsErrInvalidMergeStyle checks if an error is a ErrInvalidMergeStyle.
+func IsErrInvalidMergeStyle(err error) bool {
+	_, ok := err.(ErrInvalidMergeStyle)
+	return ok
+}
+
+func (err ErrInvalidMergeStyle) Error() string {
+	return fmt.Sprintf("merge strategy is not allowed or is invalid [repo_id: %d, strategy: %s]",
+		err.ID, err.Style)
+}
+
+// ErrMergeConflicts represents an error if merging fails with a conflict
+type ErrMergeConflicts struct {
+	Style  repo_model.MergeStyle
+	StdOut string
+	StdErr string
+	Err    error
+}
+
+// IsErrMergeConflicts checks if an error is a ErrMergeConflicts.
+func IsErrMergeConflicts(err error) bool {
+	_, ok := err.(ErrMergeConflicts)
+	return ok
+}
+
+func (err ErrMergeConflicts) Error() string {
+	return fmt.Sprintf("Merge Conflict Error: %v: %s\n%s", err.Err, err.StdErr, err.StdOut)
+}
+
+// ErrMergeUnrelatedHistories represents an error if merging fails due to unrelated histories
+type ErrMergeUnrelatedHistories struct {
+	Style  repo_model.MergeStyle
+	StdOut string
+	StdErr string
+	Err    error
+}
+
+// IsErrMergeUnrelatedHistories checks if an error is a ErrMergeUnrelatedHistories.
+func IsErrMergeUnrelatedHistories(err error) bool {
+	_, ok := err.(ErrMergeUnrelatedHistories)
+	return ok
+}
+
+func (err ErrMergeUnrelatedHistories) Error() string {
+	return fmt.Sprintf("Merge UnrelatedHistories Error: %v: %s\n%s", err.Err, err.StdErr, err.StdOut)
+}
+
+// ErrRebaseConflicts represents an error if rebase fails with a conflict
+type ErrRebaseConflicts struct {
+	Style     repo_model.MergeStyle
+	CommitSHA string
+	StdOut    string
+	StdErr    string
+	Err       error
+}
+
+// IsErrRebaseConflicts checks if an error is a ErrRebaseConflicts.
+func IsErrRebaseConflicts(err error) bool {
+	_, ok := err.(ErrRebaseConflicts)
+	return ok
+}
+
+func (err ErrRebaseConflicts) Error() string {
+	return fmt.Sprintf("Rebase Error: %v: Whilst Rebasing: %s\n%s\n%s", err.Err, err.CommitSHA, err.StdErr, err.StdOut)
+}
+
+// ErrPullRequestHasMerged represents a "PullRequestHasMerged"-error
+type ErrPullRequestHasMerged struct {
+	ID         int64
+	IssueID    int64
+	HeadRepoID int64
+	BaseRepoID int64
+	HeadBranch string
+	BaseBranch string
+}
+
+// IsErrPullRequestHasMerged checks if an error is a ErrPullRequestHasMerged.
+func IsErrPullRequestHasMerged(err error) bool {
+	_, ok := err.(ErrPullRequestHasMerged)
+	return ok
+}
+
+// Error does pretty-printing :D
+func (err ErrPullRequestHasMerged) Error() string {
+	return fmt.Sprintf("pull request has merged [id: %d, issue_id: %d, head_repo_id: %d, base_repo_id: %d, head_branch: %s, base_branch: %s]",
 		err.ID, err.IssueID, err.HeadRepoID, err.BaseRepoID, err.HeadBranch, err.BaseBranch)
 }
 
@@ -864,10 +1079,41 @@ func (err ErrTrackedTimeNotExist) Error() string {
 // |_______ (____  /___  /\___  >____/
 //         \/    \/    \/     \/
 
+// ErrRepoLabelNotExist represents a "RepoLabelNotExist" kind of error.
+type ErrRepoLabelNotExist struct {
+	LabelID int64
+	RepoID  int64
+}
+
+// IsErrRepoLabelNotExist checks if an error is a RepoErrLabelNotExist.
+func IsErrRepoLabelNotExist(err error) bool {
+	_, ok := err.(ErrRepoLabelNotExist)
+	return ok
+}
+
+func (err ErrRepoLabelNotExist) Error() string {
+	return fmt.Sprintf("label does not exist [label_id: %d, repo_id: %d]", err.LabelID, err.RepoID)
+}
+
+// ErrOrgLabelNotExist represents a "OrgLabelNotExist" kind of error.
+type ErrOrgLabelNotExist struct {
+	LabelID int64
+	OrgID   int64
+}
+
+// IsErrOrgLabelNotExist checks if an error is a OrgErrLabelNotExist.
+func IsErrOrgLabelNotExist(err error) bool {
+	_, ok := err.(ErrOrgLabelNotExist)
+	return ok
+}
+
+func (err ErrOrgLabelNotExist) Error() string {
+	return fmt.Sprintf("label does not exist [label_id: %d, org_id: %d]", err.LabelID, err.OrgID)
+}
+
 // ErrLabelNotExist represents a "LabelNotExist" kind of error.
 type ErrLabelNotExist struct {
 	LabelID int64
-	RepoID  int64
 }
 
 // IsErrLabelNotExist checks if an error is a ErrLabelNotExist.
@@ -877,7 +1123,45 @@ func IsErrLabelNotExist(err error) bool {
 }
 
 func (err ErrLabelNotExist) Error() string {
-	return fmt.Sprintf("label does not exist [label_id: %d, repo_id: %d]", err.LabelID, err.RepoID)
+	return fmt.Sprintf("label does not exist [label_id: %d]", err.LabelID)
+}
+
+// __________                   __               __
+// \______   \_______  ____    |__| ____   _____/  |_  ______
+//  |     ___/\_  __ \/  _ \   |  |/ __ \_/ ___\   __\/  ___/
+//  |    |     |  | \(  <_> )  |  \  ___/\  \___|  |  \___ \
+//  |____|     |__|   \____/\__|  |\___  >\___  >__| /____  >
+//                         \______|    \/     \/          \/
+
+// ErrProjectNotExist represents a "ProjectNotExist" kind of error.
+type ErrProjectNotExist struct {
+	ID     int64
+	RepoID int64
+}
+
+// IsErrProjectNotExist checks if an error is a ErrProjectNotExist
+func IsErrProjectNotExist(err error) bool {
+	_, ok := err.(ErrProjectNotExist)
+	return ok
+}
+
+func (err ErrProjectNotExist) Error() string {
+	return fmt.Sprintf("projects does not exist [id: %d]", err.ID)
+}
+
+// ErrProjectBoardNotExist represents a "ProjectBoardNotExist" kind of error.
+type ErrProjectBoardNotExist struct {
+	BoardID int64
+}
+
+// IsErrProjectBoardNotExist checks if an error is a ErrProjectBoardNotExist
+func IsErrProjectBoardNotExist(err error) bool {
+	_, ok := err.(ErrProjectBoardNotExist)
+	return ok
+}
+
+func (err ErrProjectBoardNotExist) Error() string {
+	return fmt.Sprintf("project board does not exist [id: %d]", err.BoardID)
 }
 
 //    _____  .__.__                   __
@@ -891,6 +1175,7 @@ func (err ErrLabelNotExist) Error() string {
 type ErrMilestoneNotExist struct {
 	ID     int64
 	RepoID int64
+	Name   string
 }
 
 // IsErrMilestoneNotExist checks if an error is a ErrMilestoneNotExist.
@@ -900,82 +1185,10 @@ func IsErrMilestoneNotExist(err error) bool {
 }
 
 func (err ErrMilestoneNotExist) Error() string {
+	if len(err.Name) > 0 {
+		return fmt.Sprintf("milestone does not exist [name: %s, repo_id: %d]", err.Name, err.RepoID)
+	}
 	return fmt.Sprintf("milestone does not exist [id: %d, repo_id: %d]", err.ID, err.RepoID)
-}
-
-//    _____   __    __                .__                           __
-//   /  _  \_/  |__/  |______    ____ |  |__   _____   ____   _____/  |_
-//  /  /_\  \   __\   __\__  \ _/ ___\|  |  \ /     \_/ __ \ /    \   __\
-// /    |    \  |  |  |  / __ \\  \___|   Y  \  Y Y  \  ___/|   |  \  |
-// \____|__  /__|  |__| (____  /\___  >___|  /__|_|  /\___  >___|  /__|
-//         \/                \/     \/     \/      \/     \/     \/
-
-// ErrAttachmentNotExist represents a "AttachmentNotExist" kind of error.
-type ErrAttachmentNotExist struct {
-	ID   int64
-	UUID string
-}
-
-// IsErrAttachmentNotExist checks if an error is a ErrAttachmentNotExist.
-func IsErrAttachmentNotExist(err error) bool {
-	_, ok := err.(ErrAttachmentNotExist)
-	return ok
-}
-
-func (err ErrAttachmentNotExist) Error() string {
-	return fmt.Sprintf("attachment does not exist [id: %d, uuid: %s]", err.ID, err.UUID)
-}
-
-// .____                 .__           _________
-// |    |    ____   ____ |__| ____    /   _____/ ____  __ _________   ____  ____
-// |    |   /  _ \ / ___\|  |/    \   \_____  \ /  _ \|  |  \_  __ \_/ ___\/ __ \
-// |    |__(  <_> ) /_/  >  |   |  \  /        (  <_> )  |  /|  | \/\  \__\  ___/
-// |_______ \____/\___  /|__|___|  / /_______  /\____/|____/ |__|    \___  >___  >
-//         \/    /_____/         \/          \/                          \/    \/
-
-// ErrLoginSourceNotExist represents a "LoginSourceNotExist" kind of error.
-type ErrLoginSourceNotExist struct {
-	ID int64
-}
-
-// IsErrLoginSourceNotExist checks if an error is a ErrLoginSourceNotExist.
-func IsErrLoginSourceNotExist(err error) bool {
-	_, ok := err.(ErrLoginSourceNotExist)
-	return ok
-}
-
-func (err ErrLoginSourceNotExist) Error() string {
-	return fmt.Sprintf("login source does not exist [id: %d]", err.ID)
-}
-
-// ErrLoginSourceAlreadyExist represents a "LoginSourceAlreadyExist" kind of error.
-type ErrLoginSourceAlreadyExist struct {
-	Name string
-}
-
-// IsErrLoginSourceAlreadyExist checks if an error is a ErrLoginSourceAlreadyExist.
-func IsErrLoginSourceAlreadyExist(err error) bool {
-	_, ok := err.(ErrLoginSourceAlreadyExist)
-	return ok
-}
-
-func (err ErrLoginSourceAlreadyExist) Error() string {
-	return fmt.Sprintf("login source already exists [name: %s]", err.Name)
-}
-
-// ErrLoginSourceInUse represents a "LoginSourceInUse" kind of error.
-type ErrLoginSourceInUse struct {
-	ID int64
-}
-
-// IsErrLoginSourceInUse checks if an error is a ErrLoginSourceInUse.
-func IsErrLoginSourceInUse(err error) bool {
-	_, ok := err.(ErrLoginSourceInUse)
-	return ok
-}
-
-func (err ErrLoginSourceInUse) Error() string {
-	return fmt.Sprintf("login source is still used by some users [id: %d]", err.ID)
 }
 
 // ___________
@@ -1001,23 +1214,21 @@ func (err ErrTeamAlreadyExist) Error() string {
 	return fmt.Sprintf("team already exists [org_id: %d, name: %s]", err.OrgID, err.Name)
 }
 
-//
-// Two-factor authentication
-//
-
-// ErrTwoFactorNotEnrolled indicates that a user is not enrolled in two-factor authentication.
-type ErrTwoFactorNotEnrolled struct {
-	UID int64
+// ErrTeamNotExist represents a "TeamNotExist" error
+type ErrTeamNotExist struct {
+	OrgID  int64
+	TeamID int64
+	Name   string
 }
 
-// IsErrTwoFactorNotEnrolled checks if an error is a ErrTwoFactorNotEnrolled.
-func IsErrTwoFactorNotEnrolled(err error) bool {
-	_, ok := err.(ErrTwoFactorNotEnrolled)
+// IsErrTeamNotExist checks if an error is a ErrTeamNotExist.
+func IsErrTeamNotExist(err error) bool {
+	_, ok := err.(ErrTeamNotExist)
 	return ok
 }
 
-func (err ErrTwoFactorNotEnrolled) Error() string {
-	return fmt.Sprintf("user not enrolled in 2FA [uid: %d]", err.UID)
+func (err ErrTeamNotExist) Error() string {
+	return fmt.Sprintf("team does not exist [org_id %d, team_id %d, name: %s]", err.OrgID, err.TeamID, err.Name)
 }
 
 //  ____ ___        .__                    .___
@@ -1036,7 +1247,7 @@ type ErrUploadNotExist struct {
 
 // IsErrUploadNotExist checks if an error is a ErrUploadNotExist.
 func IsErrUploadNotExist(err error) bool {
-	_, ok := err.(ErrAttachmentNotExist)
+	_, ok := err.(ErrUploadNotExist)
 	return ok
 }
 
@@ -1044,42 +1255,129 @@ func (err ErrUploadNotExist) Error() string {
 	return fmt.Sprintf("attachment does not exist [id: %d, uuid: %s]", err.ID, err.UUID)
 }
 
-//  ___________         __                             .__    .____                 .__          ____ ___
-//  \_   _____/__  ____/  |_  ___________  ____ _____  |  |   |    |    ____   ____ |__| ____   |    |   \______ ___________
-//   |    __)_\  \/  /\   __\/ __ \_  __ \/    \\__  \ |  |   |    |   /  _ \ / ___\|  |/    \  |    |   /  ___// __ \_  __ \
-//   |        \>    <  |  | \  ___/|  | \/   |  \/ __ \|  |__ |    |__(  <_> ) /_/  >  |   |  \ |    |  /\___ \\  ___/|  | \/
-//  /_______  /__/\_ \ |__|  \___  >__|  |___|  (____  /____/ |_______ \____/\___  /|__|___|  / |______//____  >\___  >__|
-//          \/      \/           \/           \/     \/               \/    /_____/         \/               \/     \/
+// .___                            ________                                   .___                   .__
+// |   | ______ ________ __   ____ \______ \   ____ ______   ____   ____    __| _/____   ____   ____ |__| ____   ______
+// |   |/  ___//  ___/  |  \_/ __ \ |    |  \_/ __ \\____ \_/ __ \ /    \  / __ |/ __ \ /    \_/ ___\|  |/ __ \ /  ___/
+// |   |\___ \ \___ \|  |  /\  ___/ |    `   \  ___/|  |_> >  ___/|   |  \/ /_/ \  ___/|   |  \  \___|  \  ___/ \___ \
+// |___/____  >____  >____/  \___  >_______  /\___  >   __/ \___  >___|  /\____ |\___  >___|  /\___  >__|\___  >____  >
+//          \/     \/            \/        \/     \/|__|        \/     \/      \/    \/     \/     \/        \/     \/
 
-// ErrExternalLoginUserAlreadyExist represents a "ExternalLoginUserAlreadyExist" kind of error.
-type ErrExternalLoginUserAlreadyExist struct {
-	ExternalID    string
-	UserID        int64
-	LoginSourceID int64
+// ErrDependencyExists represents a "DependencyAlreadyExists" kind of error.
+type ErrDependencyExists struct {
+	IssueID      int64
+	DependencyID int64
 }
 
-// IsErrExternalLoginUserAlreadyExist checks if an error is a ExternalLoginUserAlreadyExist.
-func IsErrExternalLoginUserAlreadyExist(err error) bool {
-	_, ok := err.(ErrExternalLoginUserAlreadyExist)
+// IsErrDependencyExists checks if an error is a ErrDependencyExists.
+func IsErrDependencyExists(err error) bool {
+	_, ok := err.(ErrDependencyExists)
 	return ok
 }
 
-func (err ErrExternalLoginUserAlreadyExist) Error() string {
-	return fmt.Sprintf("external login user already exists [externalID: %s, userID: %d, loginSourceID: %d]", err.ExternalID, err.UserID, err.LoginSourceID)
+func (err ErrDependencyExists) Error() string {
+	return fmt.Sprintf("issue dependency does already exist [issue id: %d, dependency id: %d]", err.IssueID, err.DependencyID)
 }
 
-// ErrExternalLoginUserNotExist represents a "ExternalLoginUserNotExist" kind of error.
-type ErrExternalLoginUserNotExist struct {
-	UserID        int64
-	LoginSourceID int64
+// ErrDependencyNotExists represents a "DependencyAlreadyExists" kind of error.
+type ErrDependencyNotExists struct {
+	IssueID      int64
+	DependencyID int64
 }
 
-// IsErrExternalLoginUserNotExist checks if an error is a ExternalLoginUserNotExist.
-func IsErrExternalLoginUserNotExist(err error) bool {
-	_, ok := err.(ErrExternalLoginUserNotExist)
+// IsErrDependencyNotExists checks if an error is a ErrDependencyExists.
+func IsErrDependencyNotExists(err error) bool {
+	_, ok := err.(ErrDependencyNotExists)
 	return ok
 }
 
-func (err ErrExternalLoginUserNotExist) Error() string {
-	return fmt.Sprintf("external login user link does not exists [userID: %d, loginSourceID: %d]", err.UserID, err.LoginSourceID)
+func (err ErrDependencyNotExists) Error() string {
+	return fmt.Sprintf("issue dependency does not exist [issue id: %d, dependency id: %d]", err.IssueID, err.DependencyID)
+}
+
+// ErrCircularDependency represents a "DependencyCircular" kind of error.
+type ErrCircularDependency struct {
+	IssueID      int64
+	DependencyID int64
+}
+
+// IsErrCircularDependency checks if an error is a ErrCircularDependency.
+func IsErrCircularDependency(err error) bool {
+	_, ok := err.(ErrCircularDependency)
+	return ok
+}
+
+func (err ErrCircularDependency) Error() string {
+	return fmt.Sprintf("circular dependencies exists (two issues blocking each other) [issue id: %d, dependency id: %d]", err.IssueID, err.DependencyID)
+}
+
+// ErrDependenciesLeft represents an error where the issue you're trying to close still has dependencies left.
+type ErrDependenciesLeft struct {
+	IssueID int64
+}
+
+// IsErrDependenciesLeft checks if an error is a ErrDependenciesLeft.
+func IsErrDependenciesLeft(err error) bool {
+	_, ok := err.(ErrDependenciesLeft)
+	return ok
+}
+
+func (err ErrDependenciesLeft) Error() string {
+	return fmt.Sprintf("issue has open dependencies [issue id: %d]", err.IssueID)
+}
+
+// ErrUnknownDependencyType represents an error where an unknown dependency type was passed
+type ErrUnknownDependencyType struct {
+	Type DependencyType
+}
+
+// IsErrUnknownDependencyType checks if an error is ErrUnknownDependencyType
+func IsErrUnknownDependencyType(err error) bool {
+	_, ok := err.(ErrUnknownDependencyType)
+	return ok
+}
+
+func (err ErrUnknownDependencyType) Error() string {
+	return fmt.Sprintf("unknown dependency type [type: %d]", err.Type)
+}
+
+//  __________            .__
+//  \______   \ _______  _|__| ______  _  __
+//  |       _// __ \  \/ /  |/ __ \ \/ \/ /
+//  |    |   \  ___/\   /|  \  ___/\     /
+//  |____|_  /\___  >\_/ |__|\___  >\/\_/
+//  \/     \/             \/
+
+// ErrReviewNotExist represents a "ReviewNotExist" kind of error.
+type ErrReviewNotExist struct {
+	ID int64
+}
+
+// IsErrReviewNotExist checks if an error is a ErrReviewNotExist.
+func IsErrReviewNotExist(err error) bool {
+	_, ok := err.(ErrReviewNotExist)
+	return ok
+}
+
+func (err ErrReviewNotExist) Error() string {
+	return fmt.Sprintf("review does not exist [id: %d]", err.ID)
+}
+
+// ErrNotValidReviewRequest an not allowed review request modify
+type ErrNotValidReviewRequest struct {
+	Reason string
+	UserID int64
+	RepoID int64
+}
+
+// IsErrNotValidReviewRequest checks if an error is a ErrNotValidReviewRequest.
+func IsErrNotValidReviewRequest(err error) bool {
+	_, ok := err.(ErrNotValidReviewRequest)
+	return ok
+}
+
+func (err ErrNotValidReviewRequest) Error() string {
+	return fmt.Sprintf("%s [user_id: %d, repo_id: %d]",
+		err.Reason,
+		err.UserID,
+		err.RepoID)
 }
