@@ -29,11 +29,11 @@ usr/share/javascript/highlight.js/styles/default.css
 usr/share/javascript/highlight.js/styles/github.css
 		usr/share/gitea/public/vendor/plugins/highlight/github.css
 
-# libjs-codemirror
-usr/share/javascript/codemirror/addon/mode
-		usr/share/gitea/public/vendor/plugins/codemirror/addon/mode
-usr/share/javascript/codemirror/mode
-		usr/share/gitea/public/vendor/plugins/codemirror/mode
+## libjs-codemirror
+#usr/share/javascript/codemirror/addon/mode
+#		usr/share/gitea/public/vendor/plugins/codemirror/addon/mode
+#usr/share/javascript/codemirror/mode
+#		usr/share/gitea/public/vendor/plugins/codemirror/mode
 
 # libjs-jquery
 usr/share/javascript/jquery/jquery.min.js
@@ -96,8 +96,8 @@ usr/share/javascript/jquery-areyousure/jquery.are-you-sure.min.js
 		usr/share/gitea/public/vendor/plugins/jquery.areyousure/jquery.are-you-sure.js
 
 # libjs-pdf
-usr/share/javascript/pdf
-		usr/share/gitea/public/vendor/plugins/pdfjs
+#usr/share/javascript/pdfjs/
+#		usr/share/gitea/public/vendor/plugins/pdfjs/
 
 # libjs-simplemde
 usr/share/javascript/simplemde/css/simplemde.css
