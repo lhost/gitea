@@ -213,7 +213,6 @@ Depends: fonts-font-awesome,
          libjs-jquery-timepicker,
          libjs-pdf,
          libjs-simplemde,
-         octicons,
          pdf.js-common,
          ${misc:Depends}
 Description: Painless self-hosted git service - common files
